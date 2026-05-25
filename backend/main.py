@@ -1,8 +1,16 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.database import init_db
 from app.routers import users, weekly_preferences, tasks, schedule_blocks, completions
 
 app = FastAPI(title="Sunday API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 API_PREFIX = "/api/v1"
 
