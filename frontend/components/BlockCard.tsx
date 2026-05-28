@@ -9,80 +9,82 @@ const BLOCK_LABELS: Record<string, string> = {
   task: "Task", buffer: "Buffer", event: "Event",
 };
 
-function getAccentColor(block: ScheduleBlock): string {
+function getAccent(block: ScheduleBlock): string {
   switch (block.block_type) {
-    case "sleep":     return "#7c3aed";
-    case "meal":      return "#ea580c";
-    case "commute":   return "#2563eb";
+    case "sleep":     return "#6366f1";
+    case "meal":      return "#16a34a";
     case "gym":
-    case "muay_thai": return "#16a34a";
+    case "muay_thai": return "#ea580c";
+    case "commute":   return "#7c3aed";
     case "event":     return "#0891b2";
     case "routine":
-    case "buffer":    return "#d4d4d8";
+    case "buffer":    return "#a1a1aa";
     case "task": {
       switch (block.priority) {
         case "critical": return "#dc2626";
         case "high":     return "#d97706";
         case "medium":   return "#4f46e5";
-        case "low":
-        case "optional": return "#d4d4d8";
-        default:         return "#4f46e5";
+        default:         return "#a1a1aa";
       }
     }
-    default: return "#d4d4d8";
+    default: return "#a1a1aa";
   }
 }
 
-function getBadge(block: ScheduleBlock): { bg: string; color: string } {
-  switch (block.block_type) {
-    case "sleep":     return { bg: "#f5f3ff", color: "#6d28d9" };
-    case "meal":      return { bg: "#fff7ed", color: "#c2410c" };
-    case "commute":   return { bg: "#eff6ff", color: "#1d4ed8" };
-    case "gym":
-    case "muay_thai": return { bg: "#f0fdf4", color: "#15803d" };
-    case "event":     return { bg: "#ecfeff", color: "#0e7490" };
-    case "routine":
-    case "buffer":    return { bg: "#fafafa", color: "#71717a" };
-    case "task": {
-      switch (block.priority) {
-        case "critical": return { bg: "#fef2f2", color: "#b91c1c" };
-        case "high":     return { bg: "#fffbeb", color: "#b45309" };
-        case "medium":   return { bg: "#eef2ff", color: "#4338ca" };
-        default:         return { bg: "#fafafa", color: "#a1a1aa" };
-      }
-    }
-    default: return { bg: "#fafafa", color: "#71717a" };
-  }
+function PriorityBadge({ priority }: { priority: string | null }) {
+  if (!priority || priority === "low" || priority === "optional") return null;
+  const cls: Record<string, string> = {
+    critical: "bg-red-50 text-red-700 border border-red-200",
+    high:     "bg-orange-50 text-orange-700 border border-orange-200",
+    medium:   "bg-yellow-50 text-yellow-700 border border-yellow-200",
+  };
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls[priority] ?? ""}`}>
+      {priority}
+    </span>
+  );
 }
 
-function durationLabel(b: ScheduleBlock): string {
+function durationMins(b: ScheduleBlock): number {
   const [sh, sm] = b.start_time.split(":").map(Number);
   const [eh, em] = b.end_time.split(":").map(Number);
-  const mins = eh * 60 + em - (sh * 60 + sm);
+  return eh * 60 + em - (sh * 60 + sm);
+}
+
+function fmtDuration(mins: number): string {
   if (mins < 60) return `${mins}m`;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+function fmt12(t: string): string {
+  const [h, m] = t.split(":").map(Number);
+  const period = h >= 12 ? "PM" : "AM";
+  const hour = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${hour}:${String(m).padStart(2, "0")} ${period}`;
+}
+
 interface Props {
   block: ScheduleBlock;
   onComplete?: (blockId: number, taskId: number) => Promise<void>;
   onMiss?: (blockId: number, taskId: number) => Promise<void>;
+  onSkip?: (blockId: number, taskId: number) => Promise<void>;
+  completed?: boolean;
 }
 
-export default function BlockCard({ block, onComplete, onMiss }: Props) {
-  const [loading, setLoading] = useState<"complete" | "miss" | null>(null);
-  const label = BLOCK_LABELS[block.block_type] ?? block.block_type;
+export default function BlockCard({ block, onComplete, onMiss, onSkip, completed }: Props) {
+  const [loading, setLoading] = useState<"complete" | "miss" | "skip" | null>(null);
   const isTask = block.block_type === "task" && block.task_id != null;
-  const { bg: badgeBg, color: badgeColor } = getBadge(block);
+  const mins = durationMins(block);
 
-  async function handle(type: "complete" | "miss") {
+  async function handle(type: "complete" | "miss" | "skip") {
     if (!block.task_id) return;
     setLoading(type);
     try {
       if (type === "complete") await onComplete?.(block.id, block.task_id);
-      else await onMiss?.(block.id, block.task_id);
+      else if (type === "miss") await onMiss?.(block.id, block.task_id);
+      else await onSkip?.(block.id, block.task_id);
     } finally {
       setLoading(null);
     }
@@ -90,45 +92,58 @@ export default function BlockCard({ block, onComplete, onMiss }: Props) {
 
   return (
     <div
-      className="flex items-center gap-3 sm:gap-4 bg-white rounded-xl border border-zinc-200 border-l-[3px] px-3 sm:px-4 py-3 hover:shadow-sm transition-all"
-      style={{ borderLeftColor: getAccentColor(block) }}
+      className={`flex items-start gap-3 bg-white rounded-xl border border-zinc-200 border-l-[3px] px-4 py-3 transition-all ${
+        completed ? "opacity-50" : "hover:shadow-sm"
+      }`}
+      style={{ borderLeftColor: getAccent(block) }}
     >
-      <div className="w-[96px] sm:w-[108px] shrink-0 text-[11px] sm:text-[12px] font-mono text-zinc-400 tabular-nums leading-tight">
-        {block.start_time}<br className="sm:hidden" />
-        <span className="hidden sm:inline"> – </span>
-        <span className="sm:hidden">–</span>
-        {block.end_time}
-      </div>
-
       <div className="flex-1 min-w-0">
-        <span className="text-[13px] sm:text-[14px] font-medium text-zinc-900 truncate block">
-          {block.title}
-        </span>
-        <span className="text-[11px] text-zinc-400">{durationLabel(block)}</span>
+        <div className="flex items-center gap-2 flex-wrap mb-0.5">
+          <span className={`text-[14px] font-medium text-zinc-900 truncate ${completed ? "line-through text-zinc-400" : ""}`}>
+            {block.title}
+          </span>
+          {isTask && <PriorityBadge priority={block.priority} />}
+          {completed && (
+            <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-green-50 text-green-700 border border-green-200">
+              Done
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 text-[12px] text-zinc-400">
+          <span>{fmt12(block.start_time)} – {fmt12(block.end_time)}</span>
+          <span>·</span>
+          <span>{fmtDuration(mins)}</span>
+          {!isTask && (
+            <>
+              <span>·</span>
+              <span className="capitalize">{BLOCK_LABELS[block.block_type] ?? block.block_type}</span>
+            </>
+          )}
+        </div>
       </div>
 
-      <span
-        className="hidden sm:inline shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-md"
-        style={{ background: badgeBg, color: badgeColor }}
-      >
-        {label}
-      </span>
-
-      {isTask && (
-        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+      {isTask && !completed && (
+        <div className="flex items-center gap-1 shrink-0 mt-0.5">
           <button
             onClick={() => handle("complete")}
             disabled={loading !== null}
-            className="h-7 px-2 sm:px-3 rounded-lg text-[11px] sm:text-[12px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40 transition-colors border border-emerald-200"
+            className="h-7 px-2.5 rounded-md text-[11px] font-semibold text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-40 transition-colors border border-green-200"
           >
-            {loading === "complete" ? "…" : "Done"}
+            {loading === "complete" ? "…" : "✓"}
+          </button>
+          <button
+            onClick={() => handle("skip")}
+            disabled={loading !== null}
+            className="h-7 px-2.5 rounded-md text-[11px] font-semibold text-zinc-500 bg-zinc-50 hover:bg-zinc-100 disabled:opacity-40 transition-colors border border-zinc-200"
+          >
+            {loading === "skip" ? "…" : "⟳"}
           </button>
           <button
             onClick={() => handle("miss")}
             disabled={loading !== null}
-            className="h-7 px-2 sm:px-3 rounded-lg text-[11px] sm:text-[12px] font-semibold bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-40 transition-colors border border-red-200"
+            className="h-7 px-2.5 rounded-md text-[11px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-40 transition-colors border border-red-200"
           >
-            {loading === "miss" ? "…" : "Miss"}
+            {loading === "miss" ? "…" : "✗"}
           </button>
         </div>
       )}

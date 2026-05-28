@@ -23,9 +23,9 @@
 
   input[type="time"]::-webkit-calendar-picker-indicator { filter: none; }
 
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: #fafafa; }
-  ::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 3px; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 10px; }
   ::-webkit-scrollbar-thumb:hover { background: #d4d4d8; }
 }
 
@@ -34,30 +34,35 @@
 }
 
 @keyframes slideInRight {
-  from { opacity: 0; transform: translateX(28px); }
+  from { opacity: 0; transform: translateX(24px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 @keyframes slideInLeft {
-  from { opacity: 0; transform: translateX(-28px); }
+  from { opacity: 0; transform: translateX(-24px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-.slide-enter-right { animation: slideInRight 0.32s cubic-bezier(0.25, 0.46, 0.45, 0.94) both; }
-.slide-enter-left  { animation: slideInLeft  0.32s cubic-bezier(0.25, 0.46, 0.45, 0.94) both; }
-.fade-in           { animation: fadeIn       0.32s cubic-bezier(0.25, 0.46, 0.45, 0.94) both; }
+.slide-enter-right { animation: slideInRight 0.28s cubic-bezier(0.25, 0.46, 0.45, 0.94) both; }
+.slide-enter-left  { animation: slideInLeft  0.28s cubic-bezier(0.25, 0.46, 0.45, 0.94) both; }
+.fade-in           { animation: fadeIn       0.28s cubic-bezier(0.25, 0.46, 0.45, 0.94) both; }
+.fade-up           { animation: fadeUp       0.5s  cubic-bezier(0.16, 1, 0.3, 1) both; }
 
-.wizard-range { -webkit-appearance: none; appearance: none; }
+.wizard-range { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px; cursor: pointer; }
 .wizard-range::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
-  width: 20px; height: 20px; border-radius: 50%;
-  background: #4f46e5; cursor: pointer; border: none;
-  box-shadow: 0 1px 4px rgba(79,70,229,0.3);
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #4f46e5; cursor: pointer; border: 2px solid white;
+  box-shadow: 0 0 0 2px #4f46e5;
 }
 .wizard-range::-moz-range-thumb {
-  width: 20px; height: 20px; border-radius: 50%;
-  background: #4f46e5; cursor: pointer; border: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #4f46e5; cursor: pointer; border: 2px solid white;
 }

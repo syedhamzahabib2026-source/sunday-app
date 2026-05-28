@@ -10,13 +10,11 @@ const dmSans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Sunday",
-  description: "AI-powered weekly life scheduler",
+  title: { default: "Sunday", template: "%s — Sunday" },
+  description: "AI-powered weekly life scheduler. Build your week around your real life.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={dmSans.variable}>
       <body className="antialiased bg-white text-zinc-900 min-h-screen">

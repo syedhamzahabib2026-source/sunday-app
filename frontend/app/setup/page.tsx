@@ -313,6 +313,22 @@ function Step1({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
           {sleepHours} hours of sleep
         </div>
       </div>
+      <div className="mt-6">
+        <p className="text-[13px] font-semibold text-zinc-400 uppercase tracking-widest mb-3 text-center">Sleep goal</p>
+        <div className="flex justify-center gap-3">
+          {[6, 7, 8, 9].map(h => (
+            <button key={h} type="button"
+              onClick={() => set("sleep_target_hours", h)}
+              className={`w-12 h-12 rounded-xl text-[15px] font-semibold border-2 transition-all ${
+                data.sleep_target_hours === h
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white text-zinc-600 border-zinc-200 hover:border-indigo-300"
+              }`}>
+              {h}h
+            </button>
+          ))}
+        </div>
+      </div>
     </StepShell>
   );
 }
@@ -798,10 +814,13 @@ function TasksStep({ data, set }: { data: WizardData; set: <K extends keyof Wiza
 
       {/* Add button */}
       {!showForm && (
-        <button type="button" onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 text-[14px] font-medium text-gray-700 hover:text-gray-900 transition-colors">
-          <span className="text-xl leading-none font-light">+</span> Add task
-        </button>
+        <div className="mt-3">
+          <button type="button" onClick={() => setShowForm(true)}
+            className="flex items-center gap-2 w-full px-4 py-3 rounded-xl border border-dashed border-zinc-300 text-[14px] text-zinc-400 hover:border-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 transition-all">
+            <span className="text-lg font-light">+</span>
+            <span>Add a task</span>
+          </button>
+        </div>
       )}
     </StepShell>
   );
@@ -1063,22 +1082,29 @@ export default function SetupPage() {
   }
 
   const animClass = direction === 1 ? "slide-enter-right" : "slide-enter-left";
-  const progress  = done ? 100 : mode === null ? 0 : (step / TOTAL) * 100;
 
   return (
     <div
       className="fixed inset-0 z-[60] bg-white overflow-y-auto"
       style={{ fontFamily: "var(--font-dm-sans, DM Sans, system-ui, sans-serif)" }}
     >
-      {/* Progress bar */}
-      <div className="fixed top-0 left-0 right-0 h-[3px] bg-gray-100 z-[70]">
-        <div className="h-full bg-indigo-600 transition-all duration-500 ease-out" style={{ width: `${progress}%` }} />
-      </div>
-
-      {/* Step counter */}
+      {/* Dot progress indicator */}
       {mode !== null && !done && (
-        <div className="fixed top-6 right-6 z-[70]">
-          <span className="text-[13px] text-gray-400 font-medium tabular-nums">{step} / {TOTAL}</span>
+        <div className="fixed top-6 left-0 right-0 z-[70] flex justify-center">
+          <div className="flex items-center gap-2">
+            {Array.from({ length: TOTAL }, (_, i) => (
+              <div
+                key={i}
+                className={`rounded-full transition-all duration-300 ${
+                  i < step
+                    ? "w-2 h-2 bg-indigo-600"
+                    : i === step - 1
+                    ? "w-3 h-3 bg-indigo-600"
+                    : "w-2 h-2 bg-zinc-200"
+                }`}
+              />
+            ))}
+          </div>
         </div>
       )}
 
