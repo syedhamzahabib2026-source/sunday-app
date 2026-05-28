@@ -1,0 +1,15 @@
+.env
+sunday.db
+sunday.db-shm
+sunday.db-wal
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
