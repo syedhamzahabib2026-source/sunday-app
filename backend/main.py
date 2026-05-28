@@ -2,7 +2,6 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import init_db
 from app.routers import users, weekly_preferences, tasks, schedule_blocks, completions, schedules
 
 app = FastAPI(title="Sunday API", version="1.0.0")
@@ -35,7 +34,8 @@ app.include_router(schedules.router, prefix=API_PREFIX)
 
 @app.on_event("startup")
 def on_startup():
-    init_db()
+    from migrate import run_migrations
+    run_migrations()
 
 
 @app.get("/health")

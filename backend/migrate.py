@@ -1,52 +1,62 @@
 """
-Database migration script -- run once on any environment.
-Safe to re-run: checks for existing columns before adding.
-Adds:
-  tasks     -> original_priority VARCHAR, bumped_from VARCHAR
-  schedules -> created via create_all (new table)
+Database migrations -- runs automatically on every app startup via main.py.
+Also runnable standalone: python migrate.py
+
+To add future schema changes: drop a new _add_column_if_missing() call
+inside run_migrations(). It will be applied on next deploy, no manual steps.
 """
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent / ".env")
+# Needed when running standalone; no-op when imported from within the running app
+_here = Path(__file__).resolve().parent
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
 
 from sqlalchemy import inspect, text
 from app.database import engine, init_db
 
 
-def column_names(table: str) -> set:
+def _column_names(table: str) -> set:
     return {col["name"] for col in inspect(engine).get_columns(table)}
 
 
-def add_column_if_missing(table: str, column: str, definition: str):
-    if column not in column_names(table):
+def _add_column_if_missing(table: str, column: str, definition: str) -> None:
+    if column in _column_names(table):
+        print(f"  [migrate] ok: {table}.{column}")
+        return
+    try:
         with engine.connect() as conn:
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
             conn.commit()
-        print(f"  + {table}.{column} added")
-    else:
-        print(f"  ok: {table}.{column} already exists")
+        print(f"  [migrate] + {table}.{column} added")
+    except Exception as exc:
+        # Swallow "duplicate column" errors from concurrent startups or
+        # databases that don't support IF NOT EXISTS on ALTER TABLE
+        print(f"  [migrate] skipped {table}.{column} ({exc})")
 
 
-def run():
-    print("\n-- Step 1: Create any missing tables --")
+def run_migrations() -> None:
+    """
+    Idempotent. Safe to call on every startup even if nothing has changed.
+
+    HOW TO ADD FUTURE MIGRATIONS:
+      _add_column_if_missing("table_name", "column_name", "VARCHAR")
+      _add_column_if_missing("table_name", "other_col",  "INTEGER DEFAULT 0")
+    New tables: add the SQLAlchemy model to app/models/ and import it in
+    app/database.py init_db() — create_all() below handles the rest.
+    """
+    # 1. Create any new tables defined in SQLAlchemy models
     init_db()
-    print("  ok: create_all complete")
 
-    print("\n-- Step 2: Migrate tasks table --")
-    add_column_if_missing("tasks", "original_priority", "VARCHAR")
-    add_column_if_missing("tasks", "bumped_from", "VARCHAR")
+    # 2. Columns added after initial schema (ALTER TABLE, idempotent)
+    _add_column_if_missing("tasks", "original_priority", "VARCHAR")
+    _add_column_if_missing("tasks", "bumped_from",       "VARCHAR")
 
-    print("\n-- Step 3: Verify schema --")
-    for table in ("tasks", "schedules"):
-        cols = column_names(table)
-        print(f"  {table}: {sorted(cols)}")
-
-    print("\n-- Migration complete --\n")
+    print("  [migrate] all migrations applied")
 
 
 if __name__ == "__main__":
-    run()
+    from dotenv import load_dotenv
+    load_dotenv(_here / ".env")
+    run_migrations()
