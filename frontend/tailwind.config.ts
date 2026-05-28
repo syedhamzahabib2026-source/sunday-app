@@ -11,6 +11,7 @@ const config: Config = {
     extend: {
       fontFamily: {
         sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+        "dm-sans": ["var(--font-dm-sans)", "DM Sans", "system-ui", "sans-serif"],
       },
       colors: {
         bg: "#0f0f0f",

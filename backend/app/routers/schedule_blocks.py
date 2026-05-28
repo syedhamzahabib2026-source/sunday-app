@@ -57,6 +57,15 @@ def get_day_schedule(user_id: int, day: date, db: Session = Depends(get_db)):
     )
 
 
+@router.delete("/block/{block_id}", status_code=204)
+def delete_block(block_id: int, db: Session = Depends(get_db)):
+    block = db.query(ScheduleBlock).filter(ScheduleBlock.id == block_id).first()
+    if not block:
+        raise HTTPException(status_code=404, detail="Schedule block not found")
+    db.delete(block)
+    db.commit()
+
+
 @router.patch("/{block_id}/lock", response_model=ScheduleBlockResponse)
 def lock_block(block_id: int, db: Session = Depends(get_db)):
     block = db.query(ScheduleBlock).filter(ScheduleBlock.id == block_id).first()

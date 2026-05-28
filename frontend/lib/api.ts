@@ -49,14 +49,25 @@ export interface WeeklyPreferences {
   morning_routine_mins: number;
   night_routine_mins: number;
   shower_mins: number;
+  shower_preference: string;
   meals_per_day: number;
+  meal_duration_mins: number;
   meal_prep_days: string[];
   gym_days_per_week: number;
+  gym_duration_mins: number;
   muay_thai_days_per_week: number;
+  muay_thai_duration_mins: number;
+  workout_time_preference: string;
   commute_minutes: number;
   is_remote: boolean;
+  work_days_per_week: number;
+  work_location_name: string | null;
+  weekly_task_capacity_hours: number;
+  energy_preference: string;
   fixed_commitments: string[];
   notes: string | null;
+  mode: string;
+  extra_context: string | null;
   created_at: string;
 }
 
@@ -143,6 +154,8 @@ export interface TaskCreatePayload {
   priority: string;
   energy_level: string;
   is_flexible: boolean;
+  timing_preference?: string;
+  preferred_days?: string | null;
 }
 
 export function createTask(data: TaskCreatePayload): Promise<Task> {

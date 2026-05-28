@@ -25,5 +25,8 @@ class Task(Base):
     # Allowed: pending / scheduled / complete / partial / missed / cancelled
     status = Column(String, nullable=False, default="pending")
 
+    timing_preference = Column(String, nullable=True, default="ai_decide")
+    preferred_days = Column(String, nullable=True)  # JSON-encoded list
+
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

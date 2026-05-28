@@ -16,11 +16,22 @@ class WeeklyPreferencesCreate(BaseModel):
     meals_per_day: int = 2
     meal_prep_days: List[str] = []
     gym_days_per_week: int = 3
+    gym_duration_mins: int = 75
     muay_thai_days_per_week: int = 2
+    muay_thai_duration_mins: int = 90
+    workout_time_preference: str = "morning"
     commute_minutes: int = 30
     is_remote: bool = False
+    work_days_per_week: int = 5
+    work_location_name: Optional[str] = None
+    weekly_task_capacity_hours: float = 40.0
+    energy_preference: str = "front_load"
+    shower_preference: str = "morning"
+    meal_duration_mins: int = 20
     fixed_commitments: List[str] = []
     notes: Optional[str] = None
+    mode: str = "manual"
+    extra_context: Optional[str] = None
 
 
 class WeeklyPreferencesUpdate(BaseModel):
@@ -30,14 +41,25 @@ class WeeklyPreferencesUpdate(BaseModel):
     morning_routine_mins: Optional[int] = None
     night_routine_mins: Optional[int] = None
     shower_mins: Optional[int] = None
+    shower_preference: Optional[str] = None
     meals_per_day: Optional[int] = None
+    meal_duration_mins: Optional[int] = None
     meal_prep_days: Optional[List[str]] = None
     gym_days_per_week: Optional[int] = None
+    gym_duration_mins: Optional[int] = None
     muay_thai_days_per_week: Optional[int] = None
+    muay_thai_duration_mins: Optional[int] = None
+    workout_time_preference: Optional[str] = None
     commute_minutes: Optional[int] = None
     is_remote: Optional[bool] = None
+    work_days_per_week: Optional[int] = None
+    work_location_name: Optional[str] = None
+    weekly_task_capacity_hours: Optional[float] = None
+    energy_preference: Optional[str] = None
     fixed_commitments: Optional[List[str]] = None
     notes: Optional[str] = None
+    mode: Optional[str] = None
+    extra_context: Optional[str] = None
 
 
 class WeeklyPreferencesResponse(BaseModel):
@@ -50,14 +72,25 @@ class WeeklyPreferencesResponse(BaseModel):
     morning_routine_mins: int
     night_routine_mins: int
     shower_mins: int
+    shower_preference: str
     meals_per_day: int
+    meal_duration_mins: int
     meal_prep_days: List[str]
     gym_days_per_week: int
+    gym_duration_mins: int
     muay_thai_days_per_week: int
+    muay_thai_duration_mins: int
+    workout_time_preference: str
     commute_minutes: int
     is_remote: bool
+    work_days_per_week: int
+    work_location_name: Optional[str]
+    weekly_task_capacity_hours: float
+    energy_preference: str
     fixed_commitments: List[str]
     notes: Optional[str]
+    mode: str
+    extra_context: Optional[str]
     created_at: datetime
 
     @field_validator("meal_prep_days", "fixed_commitments", mode="before")

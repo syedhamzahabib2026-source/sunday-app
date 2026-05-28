@@ -1,3 +1,4 @@
+import difflib
 import json
 import os
 import re
@@ -82,8 +83,8 @@ def _get_claude_client():
     return _claude_client
 
 
-def parse_user_intent(message_text: str, state: Optional[dict] = None) -> dict:
-    """Call Claude Haiku to extract intent and structured data.
+def parse_intent(message_text: str, state: Optional[dict] = None) -> dict:
+    """Call Claude Sonnet to extract intent and structured data.
 
     Returns {} on any failure so the caller falls back to keyword routing.
     """
@@ -93,7 +94,7 @@ def parse_user_intent(message_text: str, state: Optional[dict] = None) -> dict:
             content = f"Current conversation state: {state}\n\nUser message: {message_text}"
         client = _get_claude_client()
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",
             max_tokens=300,
             system=_CLAUDE_SYSTEM,
             messages=[{"role": "user", "content": content}],
@@ -132,6 +133,11 @@ def _api_patch(path: str, payload: Optional[dict] = None):
     return resp.json()
 
 
+def _api_delete(path: str):
+    resp = requests.delete(f"{BASE_URL}{path}", timeout=10)
+    resp.raise_for_status()
+
+
 # ── Date helpers ──────────────────────────────────────────────────────────────
 
 def _today() -> date:
@@ -152,6 +158,34 @@ def _fmt_date(d: date) -> str:
 def _active_tasks() -> list:
     all_tasks = _api_get(f"/tasks/{USER_ID}")
     return [t for t in all_tasks if t["status"] in ("pending", "scheduled")]
+
+
+def _fuzzy_find_task(query: str, tasks: list, threshold: float = 0.3) -> Optional[dict]:
+    """Return the best-matching task from *tasks*, or None.
+
+    Two-pass strategy:
+    1. Word-inclusion: if all meaningful query words (>=3 chars) appear in the task
+       title, return it immediately regardless of sequence ratio.
+    2. SequenceMatcher fallback with lowered threshold.
+    """
+    if not query or not tasks:
+        return None
+    q = query.lower()
+    q_words = [w for w in q.split() if len(w) >= 3]
+
+    for task in tasks:
+        t = task["title"].lower()
+        if q_words and all(w in t for w in q_words):
+            return task
+
+    best_task = None
+    best_ratio = threshold
+    for task in tasks:
+        ratio = difflib.SequenceMatcher(None, q, task["title"].lower()).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_task = task
+    return best_task
 
 
 def _numbered_list(tasks: list) -> str:
@@ -187,6 +221,66 @@ def _do_reorganize() -> str:
     if dropped:
         msg += f", {dropped} couldn't fit"
     return msg + "."
+
+
+_DAY_NAMES = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+
+
+def _parse_relative_day(text: str) -> Optional[date]:
+    """Convert a natural language day reference to a date.  Returns None if unparseable."""
+    lower = text.lower().strip()
+    today = _today()
+    if not lower or lower == "today":
+        return today
+    if lower == "tomorrow":
+        return today + timedelta(days=1)
+    if lower in _DAY_NAMES:
+        target_dow = _DAY_NAMES[lower]
+        days_ahead = (target_dow - today.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7  # same weekday → next week
+        return today + timedelta(days=days_ahead)
+    return None
+
+
+def _cancel_matching_block(type_hint: str, day_hint: str, say) -> bool:
+    """Find and delete schedule blocks matching *type_hint* on *day_hint*.
+
+    Returns True if at least one block was cancelled; False if nothing matched.
+    """
+    target = _parse_relative_day(day_hint)
+    if not target:
+        return False
+
+    try:
+        blocks = _api_get(f"/schedule/{USER_ID}/day/{target}")
+    except Exception:
+        return False
+
+    # Normalise hint for block_type matching (e.g. "muay thai" → "muay_thai")
+    norm = type_hint.lower().replace(" ", "_").replace("-", "_")
+    matched = [
+        b for b in blocks
+        if norm in b.get("block_type", "").lower() or norm in b.get("title", "").lower()
+    ]
+
+    if not matched:
+        return False
+
+    for block in matched:
+        try:
+            _api_delete(f"/schedule/block/{block['id']}")
+        except Exception as exc:
+            print(f"[DEBUG] delete block {block['id']} failed: {exc}")
+
+    _do_reorganize()
+    day_label = _fmt_date(target)
+    type_label = type_hint.replace("_", " ").capitalize()
+    say(f":x: *{type_label}* cancelled for *{day_label}*. Schedule updated.")
+    return True
 
 
 def _energy_from_priority(priority: str) -> str:
@@ -268,7 +362,7 @@ def _parse_deadline_text(text: str) -> tuple:
             f"Input: {text}"
         )
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",
             max_tokens=30,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -316,7 +410,7 @@ def _extract_duration_minutes(text: str) -> Optional[int]:
     try:
         client = _get_claude_client()
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6",
             max_tokens=10,
             system=(
                 "Extract only a single integer number of minutes from the user's text. "
@@ -601,9 +695,11 @@ def _route_by_intent(intent: str, data: dict, user_id: str, say, event: dict):
         prio = str(data.get("priority", "")).lower()
         if prio in ("critical", "high", "medium", "low", "optional"):
             seed["priority"] = prio
-        cleaned_dl = _clean_deadline(data.get("deadline"))
-        if cleaned_dl:
-            seed["deadline"] = cleaned_dl
+        # Treat Claude's deadline extract as definitive — null means no deadline was mentioned.
+        # Pre-setting deadline_answered prevents the bot from asking a follow-up question when
+        # the user didn't mention a deadline (the common case for quick task adds).
+        seed["deadline_answered"] = True
+        seed["deadline"] = _clean_deadline(data.get("deadline"))
         _start_add_task(user_id, seed, say)
 
     elif intent == "my_tasks":
@@ -611,11 +707,47 @@ def _route_by_intent(intent: str, data: dict, user_id: str, say, event: dict):
     elif intent == "my_schedule":
         _handle_my_schedule(say)
     elif intent == "complete_task":
-        _start_pick_flow(user_id, "complete", say)
+        hint = data.get("title") or ""
+        tasks = _active_tasks()
+        match = _fuzzy_find_task(hint, tasks)
+        if match:
+            task_id = match["id"]
+            _api_patch(f"/tasks/{task_id}/status", {"status": "complete"})
+            block = _find_task_block(task_id)
+            if block:
+                _api_patch(f"/schedule/{block['id']}/lock")
+            reorg = _do_reorganize()
+            say(f":white_check_mark: *\"{match['title']}\"* marked complete! {reorg}")
+        else:
+            _start_pick_flow(user_id, "complete", say)
+
     elif intent == "cancel_task":
-        _start_pick_flow(user_id, "cancel", say)
+        hint = data.get("title") or ""
+        tasks = _active_tasks()
+        match = _fuzzy_find_task(hint, tasks)
+        if match:
+            task_id = match["id"]
+            _api_patch(f"/tasks/{task_id}/status", {"status": "cancelled"})
+            reorg = _do_reorganize()
+            say(f":x: *\"{match['title']}\"* cancelled. {reorg}")
+        else:
+            # No task matched — try to cancel a schedule block instead.
+            # Claude uses inconsistent keys for the day: "day", "date", or "deadline".
+            day_hint = data.get("day") or data.get("date") or data.get("deadline") or ""
+            if not _cancel_matching_block(hint, day_hint, say):
+                _start_pick_flow(user_id, "cancel", say)
+
     elif intent == "missed_task":
-        _start_pick_flow(user_id, "missed", say)
+        hint = data.get("title") or ""
+        tasks = _active_tasks()
+        match = _fuzzy_find_task(hint, tasks)
+        if match:
+            task_id = match["id"]
+            _api_patch(f"/tasks/{task_id}/status", {"status": "missed"})
+            reorg = _do_reorganize()
+            say(f":warning: *\"{match['title']}\"* marked as missed. {reorg}")
+        else:
+            _start_pick_flow(user_id, "missed", say)
     elif intent == "reschedule":
         _handle_reschedule(say)
     elif intent == "generate_schedule":
@@ -682,23 +814,37 @@ _CANCEL_WORDS = frozenset((
 def _process_message(text: str, user_id: str, say, event: dict):
     """Parse intent via Claude and route, falling back to keywords on failure."""
     in_flow = user_id in conversation_state
+    lower = text.lower().strip()
 
     print(f"[DEBUG] message received: {text!r} | state: {conversation_state.get(user_id)}")
 
-    # Mid-flow: skip AI parsing entirely — raw text goes straight to the flow handler.
-    # This prevents Claude from misinterpreting bare numbers/short replies mid-conversation.
-    if in_flow:
-        print(f"[DEBUG] mid-flow detected, skipping AI parse")
-        lower = text.lower().strip()
-        if lower in _CANCEL_WORDS:
+    # Cancel always clears state regardless of whether we are mid-flow.
+    if lower in _CANCEL_WORDS:
+        if in_flow:
             del conversation_state[user_id]
             say("Cancelled. Type *help* if you need anything.")
-            return
+        else:
+            say("Nothing to cancel. Type *help* to see what I can do.")
+        return
+
+    # When mid-flow, still parse so that a fresh intent (e.g. the user starting a brand-new
+    # task while a previous flow was left open) overrides the stale state.
+    # Short replies like bare numbers or single words parse as "unknown" and stay in the flow.
+    if in_flow:
+        print(f"[DEBUG] mid-flow detected, checking for fresh-intent override")
+        parsed = parse_intent(text, None)
+        if parsed:
+            intent = parsed.get("intent", "unknown")
+            if intent not in ("unknown", "cancel_flow"):
+                print(f"[DEBUG] fresh intent {intent!r} overrides stale flow — clearing state")
+                conversation_state.pop(user_id, None)
+                _route_by_intent(intent, parsed.get("data") or {}, user_id, say, event)
+                return
+        # No clear new intent — treat as mid-flow continuation
         _continue_flow(user_id, text, say)
         return
 
-    parsed = parse_user_intent(text, None)
-
+    parsed = parse_intent(text, None)
     print(f"[DEBUG] parsed intent: {parsed}")
 
     # Claude unavailable → graceful keyword fallback
@@ -708,12 +854,10 @@ def _process_message(text: str, user_id: str, say, event: dict):
 
     intent = parsed.get("intent", "unknown")
 
-    # cancel_flow with no active flow is a no-op
     if intent == "cancel_flow":
         say("Nothing to cancel. Type *help* to see what I can do.")
         return
 
-    # Route by Claude's intent (never mid-flow here — handled above)
     _route_by_intent(intent, parsed.get("data") or {}, user_id, say, event)
 
 

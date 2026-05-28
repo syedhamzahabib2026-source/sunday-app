@@ -1,294 +1,923 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import SetupSection from "@/components/SetupSection";
-import {
-  getPreferences,
-  savePreferences,
-  generateSchedule,
-  createTask,
-} from "@/lib/api";
+import { savePreferences, generateSchedule, createTask } from "@/lib/api";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const USER_ID = 1;
 
 const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const DAYS_FULL = [
-  "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday",
-];
-const STEP_LABELS = ["Your Week", "Preferences", "Tasks", "Review"];
+const DAYS_FULL  = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+
+const PRIORITIES = ["critical", "high", "medium", "low", "optional"] as const;
+
 const LOADING_MESSAGES = [
   "Protecting your sleep...",
-  "Inserting meals and routines...",
-  "Scheduling your tasks...",
-  "Checking for overload...",
+  "Locking in your routines...",
+  "Scheduling workouts...",
+  "Blocking commute time...",
+  "Building your week...",
 ];
 
-const INPUT =
-  "w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-md px-3 text-[14px] text-[#f0f0f0] placeholder-[#555555] focus:outline-none focus:border-[#6366f1] transition-colors h-9";
-const LABEL = "text-[12px] text-[#888888] mb-1.5 block";
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+type Priority    = "critical" | "high" | "medium" | "low" | "optional";
+type ShowerPref  = "morning" | "night" | "both";
+type WorkoutTime = "morning" | "afternoon" | "evening";
+type EnergyPref  = "front_load" | "spread_out";
+type Mode        = "ai" | "manual";
+type TimingPref  = "ai_decide" | "morning" | "afternoon" | "evening";
 
-type Priority = "critical" | "high" | "medium" | "low" | "optional";
-
-const PRIORITIES: Priority[] = ["critical", "high", "medium", "low", "optional"];
+interface FixedCommitment {
+  id: string; name: string; time: string; duration: number; days: string[];
+}
 
 interface WizardTask {
   id: string;
   title: string;
-  durationText: string;
-  durationMinutes: number;
+  duration_minutes: number;
   priority: Priority;
-  deadlineText: string;
+  timing_preference: TimingPref;
+  preferred_days: string[];
 }
 
 interface WizardData {
-  weekStartDate: string;
-  sleep_target_hours: number;
   preferred_bedtime: string;
   preferred_wake_time: string;
+  sleep_target_hours: number;
   morning_routine_mins: number;
   night_routine_mins: number;
+  shower_preference: ShowerPref;
   shower_mins: number;
   meals_per_day: number;
+  meal_duration_mins: number;
   meal_prep_days: string[];
   gym_days_per_week: number;
+  gym_duration_mins: number;
   muay_thai_days_per_week: number;
-  commute_minutes: number;
+  muay_thai_duration_mins: number;
+  workout_time_preference: WorkoutTime;
   is_remote: boolean;
+  work_location_name: string;
+  commute_minutes: number;
+  work_days_per_week: number;
+  weekly_task_capacity_hours: number;
+  energy_preference: EnergyPref;
+  fixed_commitments: FixedCommitment[];
   tasks: WizardTask[];
+  extra_context: string;
 }
 
-interface TaskDraft {
-  title: string;
-  durationText: string;
-  priority: Priority;
-  deadlineText: string;
-}
-
-// ── Priority styling ──────────────────────────────────────────────────────────
-
-const PRIORITY_BORDER: Record<Priority, string> = {
-  critical: "#dc2626",
-  high:     "#d97706",
-  medium:   "#6366f1",
-  low:      "#525252",
-  optional: "#525252",
-};
-
-const PRIORITY_BADGE_BG: Record<Priority, string> = {
-  critical: "#450a0a",
-  high:     "#431407",
-  medium:   "#1e1b4b",
-  low:      "#1f2937",
-  optional: "#1f2937",
-};
-
-const PRIORITY_BADGE_COLOR: Record<Priority, string> = {
-  critical: "#fca5a5",
-  high:     "#fcd34d",
-  medium:   "#a5b4fc",
-  low:      "#9ca3af",
-  optional: "#9ca3af",
-};
-
-const PRIORITY_PILL_ACTIVE: Record<Priority, string> = {
-  critical: "bg-[#7f1d1d] text-[#fca5a5] border-[#7f1d1d]",
-  high:     "bg-[#78350f] text-[#fcd34d] border-[#78350f]",
-  medium:   "bg-[#1e1b4b] text-[#a5b4fc] border-[#1e1b4b]",
-  low:      "bg-[#1f2937] text-[#9ca3af] border-[#1f2937]",
-  optional: "bg-[#1f2937] text-[#9ca3af] border-[#1f2937]",
-};
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function toLocalDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function formatWeekRange(monday: Date): string {
-  const sunday = new Date(monday);
-  sunday.setDate(sunday.getDate() + 6);
-  const startStr = monday.toLocaleDateString("en-US", { month: "long", day: "numeric" });
-  if (monday.getMonth() === sunday.getMonth()) {
-    return `${startStr} – ${sunday.getDate()}, ${sunday.getFullYear()}`;
-  }
-  return `${startStr} – ${sunday.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`;
+function getNextMonday(): Date {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dow = today.getDay();
+  if (dow === 1) return today;
+  const diff = dow === 0 ? 1 : 8 - dow;
+  const d = new Date(today);
+  d.setDate(today.getDate() + diff);
+  return d;
 }
 
-function parseDurationToMinutes(text: string): number | null {
-  const t = text.trim().toLowerCase();
-  if (!t) return null;
-  // "1h 30m" / "1 hour 30 mins"
-  const hm = t.match(/^(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\s+(\d+)\s*(?:minutes?|mins?|m)?$/);
-  if (hm) return Math.round(parseFloat(hm[1]) * 60 + parseInt(hm[2]));
-  // "2 hours" / "1.5h"
-  const h = t.match(/^(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)$/);
-  if (h) return Math.round(parseFloat(h[1]) * 60);
-  // "90 mins" / "30m" / "45" (bare number = minutes)
-  const m = t.match(/^(\d+(?:\.\d+)?)\s*(?:minutes?|mins?|m)?$/);
-  if (m) return Math.round(parseFloat(m[1]));
-  return null;
+function timeToMins(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
 }
 
-function formatMinutes(mins: number): string {
+function minsToTime(mins: number): string {
+  const m = ((mins % 1440) + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+function fmt12(t: string): string {
+  const [h, m] = t.split(":").map(Number);
+  const period = h >= 12 ? "PM" : "AM";
+  const hour   = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${hour}:${String(m).padStart(2, "0")} ${period}`;
+}
+
+function calcSleepHours(bed: string, wake: string): number {
+  let b = timeToMins(bed), w = timeToMins(wake);
+  if (w <= b) w += 1440;
+  return Math.round((w - b) / 6) / 10;
+}
+
+function fmtDuration(mins: number): string {
   if (mins < 60) return `${mins} min`;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-function estimateFreeHours(d: WizardData): number {
-  const dailyFixed =
-    d.sleep_target_hours +
-    (d.morning_routine_mins + d.night_routine_mins + d.shower_mins) / 60 +
-    (d.meals_per_day * 30) / 60;
-  const weeklyFixed =
-    dailyFixed * 7 +
-    (d.is_remote ? 0 : (d.commute_minutes * 2 * 5) / 60) +
-    d.gym_days_per_week * 1.5 +
-    d.muay_thai_days_per_week * 1.5;
-  return Math.max(0, Math.round(7 * 16 - weeklyFixed));
-}
+// ─── Defaults ─────────────────────────────────────────────────────────────────
 
-function getWeekOptions(): { label: string; monday: Date }[] {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const dow = today.getDay(); // 0=Sun, 1=Mon
-
-  if (dow === 0) {
-    // Sunday: upcoming Monday = tomorrow
-    const a = new Date(today);
-    a.setDate(today.getDate() + 1);
-    const b = new Date(a);
-    b.setDate(a.getDate() + 7);
-    return [
-      { label: "This coming week", monday: a },
-      { label: "Next week", monday: b },
-    ];
-  }
-  if (dow === 1) {
-    // Monday: this week or next
-    const a = new Date(today);
-    const b = new Date(today);
-    b.setDate(today.getDate() + 7);
-    return [
-      { label: "This week", monday: a },
-      { label: "Next week", monday: b },
-    ];
-  }
-  // Tue–Sat: only next Monday
-  const diff = 8 - dow;
-  const next = new Date(today);
-  next.setDate(today.getDate() + diff);
-  return [{ label: "Upcoming week", monday: next }];
-}
-
-// ── Defaults ──────────────────────────────────────────────────────────────────
-
-const DEFAULT_DATA: WizardData = {
-  weekStartDate: toLocalDateString(getWeekOptions()[0].monday),
+const DEFAULTS: WizardData = {
+  preferred_bedtime: "23:00",
+  preferred_wake_time: "07:00",
   sleep_target_hours: 8,
-  preferred_bedtime: "23:30",
-  preferred_wake_time: "07:30",
   morning_routine_mins: 30,
   night_routine_mins: 20,
+  shower_preference: "morning",
   shower_mins: 15,
   meals_per_day: 3,
+  meal_duration_mins: 20,
   meal_prep_days: [],
   gym_days_per_week: 3,
+  gym_duration_mins: 75,
   muay_thai_days_per_week: 2,
-  commute_minutes: 30,
+  muay_thai_duration_mins: 90,
+  workout_time_preference: "morning",
   is_remote: false,
+  work_location_name: "",
+  commute_minutes: 30,
+  work_days_per_week: 5,
+  weekly_task_capacity_hours: 40,
+  energy_preference: "front_load",
+  fixed_commitments: [],
   tasks: [],
+  extra_context: "",
 };
 
-const DEFAULT_DRAFT: TaskDraft = {
-  title: "",
-  durationText: "",
-  priority: "medium",
-  deadlineText: "",
-};
+// ─── UI Primitives ────────────────────────────────────────────────────────────
 
-// ── Component ─────────────────────────────────────────────────────────────────
+function TimePicker({ label, value, onChange }: {
+  label: string; value: string; onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-5">
+      <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">{label}</span>
+      <div className="flex items-center gap-5">
+        <button type="button" onClick={() => onChange(minsToTime(timeToMins(value) - 15))}
+          className="w-11 h-11 rounded-full border border-gray-200 text-gray-500 text-xl flex items-center justify-center hover:bg-gray-50 transition-colors select-none">
+          −
+        </button>
+        <div className="text-[2.6rem] font-light text-gray-900 tabular-nums tracking-tight w-40 text-center leading-none">
+          {fmt12(value)}
+        </div>
+        <button type="button" onClick={() => onChange(minsToTime(timeToMins(value) + 15))}
+          className="w-11 h-11 rounded-full border border-gray-200 text-gray-500 text-xl flex items-center justify-center hover:bg-gray-50 transition-colors select-none">
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Stepper({ label, value, onChange, min = 0, max = 180, step = 5, unit = "min" }: {
+  label: string; value: number; onChange: (v: number) => void;
+  min?: number; max?: number; step?: number; unit?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between py-4 border-b border-gray-100 last:border-0">
+      <span className="text-[15px] text-gray-700">{label}</span>
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={() => onChange(Math.max(min, value - step))}
+          className="w-9 h-9 rounded-full border border-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-50 transition-colors select-none text-lg">
+          −
+        </button>
+        <span className="text-[15px] font-medium text-gray-900 w-20 text-center tabular-nums">
+          {value} {unit}
+        </span>
+        <button type="button" onClick={() => onChange(Math.min(max, value + step))}
+          className="w-9 h-9 rounded-full border border-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-50 transition-colors select-none text-lg">
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Chips<T extends string>({ options, value, onChange, multi = false }: {
+  options: { value: T; label: string }[];
+  value: T | T[];
+  onChange: (v: T | T[]) => void;
+  multi?: boolean;
+}) {
+  const isActive = (v: T) => multi ? (value as T[]).includes(v) : value === v;
+  const toggle = (v: T) => {
+    if (!multi) { onChange(v); return; }
+    const arr = value as T[];
+    onChange(arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v]);
+  };
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map(opt => (
+        <button key={opt.value} type="button" onClick={() => toggle(opt.value)}
+          className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
+            isActive(opt.value) ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+          }`}>
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function NumberChips({ options, value, onChange }: {
+  options: number[]; value: number; onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map(n => (
+        <button key={n} type="button" onClick={() => onChange(n)}
+          className={`w-10 h-10 rounded-full text-[14px] font-medium border transition-all ${
+            value === n ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+          }`}>
+          {n}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Step shell ───────────────────────────────────────────────────────────────
+
+function StepShell({ headline, subtext, children }: {
+  headline: string; subtext: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="w-full max-w-lg mx-auto">
+      <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-3 tracking-tight">
+        {headline}
+      </h1>
+      <p className="text-[16px] text-gray-500 mb-10 leading-relaxed">{subtext}</p>
+      {children}
+    </div>
+  );
+}
+
+// ─── MODE SCREEN ──────────────────────────────────────────────────────────────
+
+function ModeScreen({ onSelect }: { onSelect: (m: Mode) => void }) {
+  return (
+    <div className="w-full max-w-lg mx-auto fade-in">
+      <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-3 tracking-tight">
+        How do you want to plan?
+      </h1>
+      <p className="text-[16px] text-gray-500 mb-10 leading-relaxed">Sunday works two ways.</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {([
+          {
+            mode: "ai" as Mode,
+            emoji: "🤖",
+            label: "AI Mode",
+            desc: "Sunday decides your sleep time, wake time, meals and workouts. Just follow the schedule.",
+          },
+          {
+            mode: "manual" as Mode,
+            emoji: "✏️",
+            label: "Manual Mode",
+            desc: "Tell Sunday your preferences and it builds around them.",
+          },
+        ]).map(opt => (
+          <button key={opt.mode} type="button" onClick={() => onSelect(opt.mode)}
+            className="p-6 rounded-2xl border-2 border-gray-200 bg-white text-left hover:border-gray-900 hover:bg-gray-50 transition-all group">
+            <div className="text-3xl mb-4">{opt.emoji}</div>
+            <div className="text-[17px] font-semibold text-gray-900 mb-2 group-hover:text-gray-900">
+              {opt.label}
+            </div>
+            <div className="text-[14px] text-gray-500 leading-relaxed">{opt.desc}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Step 1 — Sleep ───────────────────────────────────────────────────────────
+
+function Step1({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+  const sleepHours = calcSleepHours(data.preferred_bedtime, data.preferred_wake_time);
+  return (
+    <StepShell headline="When do you sleep?" subtext="Sunday will protect this time every single night.">
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-10 mb-10">
+        <TimePicker label="Bedtime" value={data.preferred_bedtime}
+          onChange={v => { set("preferred_bedtime", v); set("sleep_target_hours", calcSleepHours(v, data.preferred_wake_time)); }} />
+        <div className="hidden sm:block w-px h-24 bg-gray-100" />
+        <TimePicker label="Wake up" value={data.preferred_wake_time}
+          onChange={v => { set("preferred_wake_time", v); set("sleep_target_hours", calcSleepHours(data.preferred_bedtime, v)); }} />
+      </div>
+      <div className="text-center">
+        <div className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-[15px] font-medium ${
+          sleepHours >= 7 ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"
+        }`}>
+          <span className={`w-2 h-2 rounded-full ${sleepHours >= 7 ? "bg-green-500" : "bg-amber-500"}`} />
+          {sleepHours} hours of sleep
+        </div>
+      </div>
+    </StepShell>
+  );
+}
+
+// ─── Step 2 — Daily Rhythm ────────────────────────────────────────────────────
+
+function Step2({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+  const toggleMealPrepDay = (full: string) => {
+    set("meal_prep_days", data.meal_prep_days.includes(full)
+      ? data.meal_prep_days.filter(d => d !== full)
+      : [...data.meal_prep_days, full]);
+  };
+  return (
+    <StepShell headline="What does your day actually look like?" subtext="These blocks are reserved automatically — every day.">
+      <div className="space-y-0 bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 mb-8">
+        <Stepper label="Morning routine" value={data.morning_routine_mins} onChange={v => set("morning_routine_mins", v)} min={10} max={120} />
+        <Stepper label="Night routine"   value={data.night_routine_mins}   onChange={v => set("night_routine_mins", v)}   min={5}  max={60}  />
+        <Stepper label="Shower duration" value={data.shower_mins}          onChange={v => set("shower_mins", v)}          min={5}  max={30}  />
+      </div>
+      <div className="mb-8">
+        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Shower time</p>
+        <Chips options={[
+          {value: "morning" as ShowerPref, label: "Morning"},
+          {value: "night"   as ShowerPref, label: "Night"},
+          {value: "both"    as ShowerPref, label: "Both"},
+        ]} value={data.shower_preference} onChange={v => set("shower_preference", v as ShowerPref)} />
+      </div>
+      <div className="mb-8">
+        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Meals per day</p>
+        <NumberChips options={[1,2,3,4]} value={data.meals_per_day} onChange={v => set("meals_per_day", v)} />
+      </div>
+      <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 mb-8">
+        <Stepper label="Average meal duration" value={data.meal_duration_mins} onChange={v => set("meal_duration_mins", v)} min={10} max={60} />
+      </div>
+      <div>
+        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Meal prep days</p>
+        <p className="text-[14px] text-gray-500 mb-3">Leave empty if you don&apos;t meal prep.</p>
+        <div className="flex flex-wrap gap-2">
+          {DAYS_SHORT.map((short, i) => {
+            const full = DAYS_FULL[i];
+            const active = data.meal_prep_days.includes(full);
+            return (
+              <button key={full} type="button" onClick={() => toggleMealPrepDay(full)}
+                className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
+                  active ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                }`}>
+                {short}
+              </button>
+            );
+          })}
+        </div>
+        {data.meal_prep_days.length > 0 && (
+          <p className="text-[13px] text-gray-400 mt-3">
+            {data.meal_prep_days.length} day{data.meal_prep_days.length !== 1 ? "s" : ""} of meal prep blocked per week.
+          </p>
+        )}
+      </div>
+    </StepShell>
+  );
+}
+
+// ─── Step 3 — Movement ────────────────────────────────────────────────────────
+
+function Step3({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+  return (
+    <StepShell headline="How do you train?" subtext="Sunday schedules your workouts before filling in everything else.">
+      <div className="space-y-8">
+        <div>
+          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Gym days per week</p>
+          <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.gym_days_per_week} onChange={v => set("gym_days_per_week", v)} />
+          {data.gym_days_per_week > 0 && (
+            <div className="mt-4 bg-white rounded-2xl border border-gray-100">
+              <Stepper label="Session duration" value={data.gym_duration_mins} onChange={v => set("gym_duration_mins", v)} min={30} max={180} step={15} />
+            </div>
+          )}
+        </div>
+        <div>
+          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Muay Thai days per week</p>
+          <p className="text-[14px] text-gray-400 mb-3">Set to 0 if you don&apos;t train.</p>
+          <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.muay_thai_days_per_week} onChange={v => set("muay_thai_days_per_week", v)} />
+          {data.muay_thai_days_per_week > 0 && (
+            <div className="mt-4 bg-white rounded-2xl border border-gray-100">
+              <Stepper label="Session duration" value={data.muay_thai_duration_mins} onChange={v => set("muay_thai_duration_mins", v)} min={45} max={180} step={15} />
+            </div>
+          )}
+        </div>
+        {(data.gym_days_per_week > 0 || data.muay_thai_days_per_week > 0) && (
+          <div>
+            <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Preferred workout time</p>
+            <Chips options={[
+              {value: "morning"   as WorkoutTime, label: "Morning"},
+              {value: "afternoon" as WorkoutTime, label: "Afternoon"},
+              {value: "evening"   as WorkoutTime, label: "Evening"},
+            ]} value={data.workout_time_preference} onChange={v => set("workout_time_preference", v as WorkoutTime)} />
+          </div>
+        )}
+      </div>
+    </StepShell>
+  );
+}
+
+// ─── Step 4 — Location ────────────────────────────────────────────────────────
+
+function Step4({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+  return (
+    <StepShell headline="Where does life take you?" subtext="Commute time is blocked automatically on the right days.">
+      <div className="mb-8">
+        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Work arrangement</p>
+        <div className="grid grid-cols-2 gap-3">
+          {([
+            {val: false, label: "In person", desc: "You commute to a location regularly"},
+            {val: true,  label: "Remote",    desc: "You work from home — no commute needed"},
+          ] as const).map(opt => (
+            <button key={String(opt.val)} type="button" onClick={() => set("is_remote", opt.val)}
+              className={`p-5 rounded-2xl border-2 text-left transition-all ${
+                data.is_remote === opt.val ? "border-gray-900 bg-gray-50" : "border-gray-200 bg-white hover:border-gray-300"
+              }`}>
+              <div className={`text-[15px] font-semibold mb-1 ${data.is_remote === opt.val ? "text-gray-900" : "text-gray-700"}`}>{opt.label}</div>
+              <div className="text-[13px] text-gray-500 leading-snug">{opt.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+      {!data.is_remote && (
+        <div className="space-y-6 fade-in">
+          <div>
+            <label className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest block mb-2">Location name</label>
+            <input type="text" placeholder="e.g. Office, University, Studio"
+              value={data.work_location_name} onChange={e => set("work_location_name", e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 transition-colors bg-white" />
+          </div>
+          <div>
+            <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Commute each way</p>
+            <div className="bg-white rounded-2xl border border-gray-100">
+              <Stepper label="Duration" value={data.commute_minutes} onChange={v => set("commute_minutes", v)} min={5} max={180} step={5} />
+            </div>
+          </div>
+          <div>
+            <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Days per week on-site</p>
+            <NumberChips options={[1,2,3,4,5,6,7]} value={data.work_days_per_week} onChange={v => set("work_days_per_week", v)} />
+            <p className="text-[13px] text-gray-400 mt-3">
+              {data.commute_minutes * 2 * data.work_days_per_week} min commute blocked per week
+            </p>
+          </div>
+        </div>
+      )}
+    </StepShell>
+  );
+}
+
+// ─── Step 5 — Capacity ────────────────────────────────────────────────────────
+
+function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
+  const [name, setName]    = useState("");
+  const [time, setTime]    = useState("09:00");
+  const [dur,  setDur]     = useState(30);
+  const [days, setDays]    = useState<string[]>([]);
+
+  const canAdd = name.trim() && days.length > 0;
+  const toggleDay = (full: string) => setDays(d => d.includes(full) ? d.filter(x => x !== full) : [...d, full]);
+  const handleAdd = () => {
+    if (!canAdd) return;
+    onAdd({ id: `${Date.now()}`, name: name.trim(), time, duration: dur, days });
+    setName(""); setTime("09:00"); setDur(30); setDays([]);
+  };
+
+  return (
+    <div className="bg-gray-50 rounded-2xl p-5 space-y-4 border border-gray-100">
+      <input type="text" placeholder="Commitment name (e.g. Team standup)" value={name} onChange={e => setName(e.target.value)}
+        className="w-full px-4 py-3 rounded-xl border border-gray-200 text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 bg-white" />
+      <div className="flex gap-3">
+        <div className="flex-1">
+          <p className="text-[12px] text-gray-400 mb-1.5 uppercase tracking-wider font-semibold">Time</p>
+          <input type="time" value={time} onChange={e => setTime(e.target.value)}
+            className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-[15px] text-gray-900 bg-white focus:outline-none focus:border-gray-400" />
+        </div>
+        <div className="flex-1">
+          <p className="text-[12px] text-gray-400 mb-1.5 uppercase tracking-wider font-semibold">Duration</p>
+          <select value={dur} onChange={e => setDur(Number(e.target.value))}
+            className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-[15px] text-gray-900 bg-white focus:outline-none focus:border-gray-400">
+            {[15,30,45,60,90,120].map(m => <option key={m} value={m}>{m} min</option>)}
+          </select>
+        </div>
+      </div>
+      <div>
+        <p className="text-[12px] text-gray-400 mb-2 uppercase tracking-wider font-semibold">Which days</p>
+        <div className="flex flex-wrap gap-2">
+          {DAYS_SHORT.map((short, i) => {
+            const full = DAYS_FULL[i];
+            const active = days.includes(full);
+            return (
+              <button key={full} type="button" onClick={() => toggleDay(full)}
+                className={`px-3 py-1.5 rounded-full text-[13px] font-medium border transition-all ${
+                  active ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                }`}>
+                {short}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <button type="button" onClick={handleAdd} disabled={!canAdd}
+        className="w-full py-3 rounded-xl text-[14px] font-semibold bg-gray-900 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-800 transition-colors">
+        Add commitment
+      </button>
+    </div>
+  );
+}
+
+function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const capacityPct = Math.min(100, (data.weekly_task_capacity_hours / 60) * 100);
+
+  return (
+    <StepShell headline="How much can you realistically take on?" subtext="Sunday will never schedule more than this.">
+      <div className="space-y-8">
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest">Weekly task capacity</p>
+            <span className="text-[15px] font-semibold text-gray-900 tabular-nums">{data.weekly_task_capacity_hours} hrs / week</span>
+          </div>
+          <input type="range" min={5} max={60} step={5} value={data.weekly_task_capacity_hours}
+            onChange={e => set("weekly_task_capacity_hours", Number(e.target.value))}
+            className="wizard-range w-full h-2 rounded-full cursor-pointer"
+            style={{ background: `linear-gradient(to right, #111111 ${capacityPct}%, #e5e7eb ${capacityPct}%)` }} />
+          <div className="flex justify-between mt-1.5">
+            <span className="text-[12px] text-gray-400">Light week</span>
+            <span className="text-[12px] text-gray-400">Full capacity</span>
+          </div>
+        </div>
+
+        <div>
+          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Energy scheduling</p>
+          <div className="grid grid-cols-2 gap-3">
+            {([
+              {val: "front_load" as EnergyPref, label: "Front-load", desc: "Hard work Mon–Wed, easier tasks later in the week"},
+              {val: "spread_out" as EnergyPref, label: "Spread evenly", desc: "Tasks distributed evenly across all days"},
+            ]).map(opt => (
+              <button key={opt.val} type="button" onClick={() => set("energy_preference", opt.val)}
+                className={`p-5 rounded-2xl border-2 text-left transition-all ${
+                  data.energy_preference === opt.val ? "border-gray-900 bg-gray-50" : "border-gray-200 bg-white hover:border-gray-300"
+                }`}>
+                <div className={`text-[15px] font-semibold mb-1 ${data.energy_preference === opt.val ? "text-gray-900" : "text-gray-700"}`}>{opt.label}</div>
+                <div className="text-[13px] text-gray-500 leading-snug">{opt.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest">Fixed commitments</p>
+            {!showForm && (
+              <button type="button" onClick={() => setShowForm(true)}
+                className="text-[13px] font-medium text-gray-900 hover:text-gray-600 transition-colors">+ Add</button>
+            )}
+          </div>
+          {data.fixed_commitments.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {data.fixed_commitments.map(c => (
+                <div key={c.id} className="flex items-center justify-between bg-white rounded-xl border border-gray-100 px-4 py-3">
+                  <div>
+                    <span className="text-[14px] font-medium text-gray-900">{c.name}</span>
+                    <span className="text-[13px] text-gray-400 ml-3">
+                      {fmt12(c.time)} · {c.duration} min · {c.days.map(d => d.slice(0,3)).join(", ")}
+                    </span>
+                  </div>
+                  <button type="button"
+                    onClick={() => set("fixed_commitments", data.fixed_commitments.filter(x => x.id !== c.id))}
+                    className="text-gray-300 hover:text-gray-600 transition-colors text-xl leading-none ml-3">×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {!showForm && data.fixed_commitments.length === 0 && (
+            <p className="text-[14px] text-gray-400">No fixed commitments — skip if none.</p>
+          )}
+          {showForm && (
+            <div className="fade-in">
+              <CommitmentForm onAdd={c => { set("fixed_commitments", [...data.fixed_commitments, c]); setShowForm(false); }} />
+              <button type="button" onClick={() => setShowForm(false)}
+                className="mt-3 text-[13px] text-gray-400 hover:text-gray-600 transition-colors">Cancel</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </StepShell>
+  );
+}
+
+// ─── TASKS STEP ───────────────────────────────────────────────────────────────
+
+function DraftTaskForm({ onAdd, onCancel }: {
+  onAdd: (t: WizardTask) => void;
+  onCancel: () => void;
+}) {
+  const [title,        setTitle]       = useState("");
+  const [duration,     setDuration]    = useState(30);
+  const [priority,     setPriority]    = useState<Priority>("medium");
+  const [timingMode,   setTimingMode]  = useState<"ai" | "manual">("ai");
+  const [timeOfDay,    setTimeOfDay]   = useState<"" | "morning" | "afternoon" | "evening">("");
+  const [prefDays,     setPrefDays]    = useState<string[]>([]);
+
+  const togglePrefDay = (full: string) =>
+    setPrefDays(d => d.includes(full) ? d.filter(x => x !== full) : [...d, full]);
+
+  const canAdd = title.trim().length > 0;
+
+  const handleAdd = () => {
+    if (!canAdd) return;
+    const timingPref: TimingPref =
+      timingMode === "ai" ? "ai_decide" : (timeOfDay || "ai_decide") as TimingPref;
+    onAdd({
+      id: `${Date.now()}-${Math.random()}`,
+      title: title.trim(),
+      duration_minutes: duration,
+      priority,
+      timing_preference: timingPref,
+      preferred_days: timingMode === "manual" ? prefDays : [],
+    });
+  };
+
+  return (
+    <div className="bg-gray-50 rounded-2xl p-5 space-y-5 border border-gray-100">
+      {/* Title */}
+      <input type="text" autoFocus placeholder="Task name"
+        value={title} onChange={e => setTitle(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter" && canAdd) handleAdd(); }}
+        className="w-full px-4 py-3 rounded-xl border border-gray-200 text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 bg-white" />
+
+      {/* Duration */}
+      <div className="bg-white rounded-xl border border-gray-100">
+        <Stepper label="Duration" value={duration} onChange={setDuration} min={15} max={240} step={15} />
+      </div>
+
+      {/* Priority */}
+      <div>
+        <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Priority</p>
+        <div className="flex flex-wrap gap-2">
+          {PRIORITIES.map(p => (
+            <button key={p} type="button" onClick={() => setPriority(p)}
+              className={`px-3 py-1.5 rounded-full text-[13px] font-medium border capitalize transition-all ${
+                priority === p ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+              }`}>
+              {p}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Timing */}
+      <div>
+        <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Timing</p>
+        <div className="grid grid-cols-2 gap-2">
+          {([
+            {id: "ai"     as const, emoji: "🤖", label: "AI picks the best time"},
+            {id: "manual" as const, emoji: "🕐", label: "I have a preference"},
+          ]).map(opt => (
+            <button key={opt.id} type="button" onClick={() => setTimingMode(opt.id)}
+              className={`p-3 rounded-xl border-2 text-left transition-all ${
+                timingMode === opt.id ? "border-gray-900 bg-white" : "border-gray-200 bg-white hover:border-gray-300"
+              }`}>
+              <span className="text-lg">{opt.emoji}</span>
+              <div className={`text-[13px] font-medium mt-1 ${timingMode === opt.id ? "text-gray-900" : "text-gray-600"}`}>
+                {opt.label}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {timingMode === "manual" && (
+          <div className="mt-4 space-y-4 fade-in">
+            <div>
+              <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Day preference <span className="normal-case font-normal">(optional)</span></p>
+              <div className="flex flex-wrap gap-2">
+                {DAYS_SHORT.map((short, i) => {
+                  const full = DAYS_FULL[i];
+                  const active = prefDays.includes(full);
+                  return (
+                    <button key={full} type="button" onClick={() => togglePrefDay(full)}
+                      className={`px-3 py-1.5 rounded-full text-[13px] font-medium border transition-all ${
+                        active ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                      }`}>
+                      {short}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
+              <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Time of day <span className="normal-case font-normal">(optional)</span></p>
+              <div className="flex flex-wrap gap-2">
+                {(["morning", "afternoon", "evening"] as const).map(tod => (
+                  <button key={tod} type="button"
+                    onClick={() => setTimeOfDay(prev => prev === tod ? "" : tod)}
+                    className={`px-4 py-2 rounded-full text-[14px] font-medium border capitalize transition-all ${
+                      timeOfDay === tod ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                    }`}>
+                    {tod}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-2 pt-1">
+        <button type="button" onClick={handleAdd} disabled={!canAdd}
+          className="flex-1 py-3 rounded-xl text-[14px] font-semibold bg-gray-900 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-800 transition-colors">
+          Add task
+        </button>
+        <button type="button" onClick={onCancel}
+          className="px-5 py-3 rounded-xl text-[14px] text-gray-500 border border-gray-200 hover:border-gray-400 transition-colors">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TasksStep({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+  const [showForm, setShowForm] = useState(false);
+
+  const addTask = (t: WizardTask) => {
+    set("tasks", [...data.tasks, t]);
+    setShowForm(false);
+  };
+
+  const removeTask = (id: string) => {
+    set("tasks", data.tasks.filter(t => t.id !== id));
+  };
+
+  return (
+    <StepShell
+      headline="What needs to get done?"
+      subtext="Add everything on your plate. Sunday will fit it into your schedule."
+    >
+      {/* Task list */}
+      {data.tasks.length > 0 && (
+        <div className="space-y-2 mb-5">
+          {data.tasks.map(task => (
+            <div key={task.id} className="flex items-center gap-3 bg-white rounded-xl border border-gray-100 px-4 py-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-medium text-gray-900 truncate">{task.title}</div>
+                <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                  <span className="text-[12px] text-gray-400">{fmtDuration(task.duration_minutes)}</span>
+                  <span className="text-[12px] text-gray-300">·</span>
+                  <span className="text-[12px] text-gray-400 capitalize">{task.priority}</span>
+                  <span className="text-[12px] text-gray-300">·</span>
+                  <span className="text-[12px] text-gray-400">
+                    {task.timing_preference === "ai_decide"
+                      ? "AI scheduled"
+                      : `${task.timing_preference}${task.preferred_days.length > 0 ? ` · ${task.preferred_days.map(d => d.slice(0,3)).join(", ")}` : ""}`
+                    }
+                  </span>
+                </div>
+              </div>
+              <button type="button" onClick={() => removeTask(task.id)}
+                className="text-gray-300 hover:text-gray-600 transition-colors text-xl leading-none shrink-0">
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {data.tasks.length === 0 && !showForm && (
+        <div className="py-12 text-center border-2 border-dashed border-gray-100 rounded-2xl mb-5">
+          <p className="text-[15px] text-gray-400 mb-1">No tasks yet</p>
+          <p className="text-[13px] text-gray-300">Add at least one to continue</p>
+        </div>
+      )}
+
+      {/* Draft form */}
+      {showForm && (
+        <div className="mb-4 fade-in">
+          <DraftTaskForm onAdd={addTask} onCancel={() => setShowForm(false)} />
+        </div>
+      )}
+
+      {/* Add button */}
+      {!showForm && (
+        <button type="button" onClick={() => setShowForm(true)}
+          className="flex items-center gap-2 text-[14px] font-medium text-gray-700 hover:text-gray-900 transition-colors">
+          <span className="text-xl leading-none font-light">+</span> Add task
+        </button>
+      )}
+    </StepShell>
+  );
+}
+
+// ─── FREE TEXT STEP ───────────────────────────────────────────────────────────
+
+function FreeTextStep({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+  return (
+    <StepShell
+      headline="Anything else Sunday should know?"
+      subtext="Optional. This context shapes how Sunday makes decisions for the week."
+    >
+      <textarea
+        value={data.extra_context}
+        onChange={e => set("extra_context", e.target.value)}
+        placeholder={"e.g. Low energy Wednesday, dentist Thursday 2pm, trying to avoid screens after 9pm..."}
+        rows={6}
+        className="w-full px-4 py-4 rounded-2xl border border-gray-200 text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 transition-colors resize-none bg-white leading-relaxed"
+      />
+      {data.extra_context.length === 0 && (
+        <p className="text-[13px] text-gray-400 mt-3">You can skip this — it&apos;s entirely optional.</p>
+      )}
+    </StepShell>
+  );
+}
+
+// ─── DONE SCREEN ──────────────────────────────────────────────────────────────
+
+function DoneScreen() {
+  const router = useRouter();
+  return (
+    <div className="w-full max-w-lg mx-auto text-center fade-in">
+      <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mx-auto mb-8">
+        <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+      </div>
+      <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-4 tracking-tight">
+        Your week is protected.
+      </h1>
+      <p className="text-[16px] text-gray-500 mb-12 leading-relaxed">
+        Sunday generates your first schedule on Sunday.
+      </p>
+      <button type="button" onClick={() => router.push("/week")}
+        className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-gray-900 text-white text-[16px] font-semibold hover:bg-gray-800 transition-colors">
+        View this week →
+      </button>
+    </div>
+  );
+}
+
+// ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
 export default function SetupPage() {
-  const router = useRouter();
-  const [step, setStep] = useState(1);
-  const [data, setData] = useState<WizardData>(DEFAULT_DATA);
-  const [showTaskForm, setShowTaskForm] = useState(false);
-  const [draft, setDraft] = useState<TaskDraft>(DEFAULT_DRAFT);
-  const [generating, setGenerating] = useState(false);
+  const [mode,          setMode]          = useState<Mode | null>(null);
+  const [step,          setStep]          = useState(1);
+  const [direction,     setDirection]     = useState<1 | -1>(1);
+  const [data,          setData]          = useState<WizardData>(DEFAULTS);
+  const [generating,    setGenerating]    = useState(false);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
-  const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [errMsg,        setErrMsg]        = useState<string | null>(null);
+  const [done,          setDone]          = useState(false);
 
-  // Pre-populate preferences from last saved
-  useEffect(() => {
-    getPreferences(USER_ID)
-      .then((prefs) => {
-        setData((prev) => ({
-          ...prev,
-          sleep_target_hours: prefs.sleep_target_hours,
-          preferred_bedtime: prefs.preferred_bedtime,
-          preferred_wake_time: prefs.preferred_wake_time,
-          morning_routine_mins: prefs.morning_routine_mins,
-          night_routine_mins: prefs.night_routine_mins,
-          shower_mins: prefs.shower_mins,
-          meals_per_day: prefs.meals_per_day,
-          meal_prep_days: prefs.meal_prep_days,
-          gym_days_per_week: prefs.gym_days_per_week,
-          muay_thai_days_per_week: prefs.muay_thai_days_per_week,
-          commute_minutes: prefs.commute_minutes,
-          is_remote: prefs.is_remote,
-        }));
-      })
-      .catch(() => {/* fall back to defaults */});
-  }, []);
-
-  // Cycle loading messages during generation
   useEffect(() => {
     if (!generating) return;
-    const interval = setInterval(
-      () => setLoadingMsgIdx((i) => (i + 1) % LOADING_MESSAGES.length),
-      1500
-    );
-    return () => clearInterval(interval);
+    const id = setInterval(() => setLoadingMsgIdx(i => (i + 1) % LOADING_MESSAGES.length), 1600);
+    return () => clearInterval(id);
   }, [generating]);
 
-  function setField<K extends keyof WizardData>(key: K, value: WizardData[K]) {
-    setData((prev) => ({ ...prev, [key]: value }));
+  function set<K extends keyof WizardData>(key: K, value: WizardData[K]) {
+    setData(prev => ({ ...prev, [key]: value }));
   }
 
-  function toggleDay(fullDay: string) {
-    setData((prev) => ({
-      ...prev,
-      meal_prep_days: prev.meal_prep_days.includes(fullDay)
-        ? prev.meal_prep_days.filter((d) => d !== fullDay)
-        : [...prev.meal_prep_days, fullDay],
-    }));
+  function selectMode(m: Mode) {
+    setMode(m);
+    setStep(1);
+    setDirection(1);
   }
 
-  function addTask() {
-    const mins = parseDurationToMinutes(draft.durationText);
-    if (!draft.title.trim() || mins === null) return;
-    const task: WizardTask = {
-      id: `${Date.now()}-${Math.random()}`,
-      title: draft.title.trim(),
-      durationText: draft.durationText,
-      durationMinutes: mins,
-      priority: draft.priority,
-      deadlineText: draft.deadlineText,
-    };
-    setData((prev) => ({ ...prev, tasks: [...prev.tasks, task] }));
-    setDraft(DEFAULT_DRAFT);
-    setShowTaskForm(false);
+  function goNext() {
+    setDirection(1);
+    setStep(s => s + 1);
   }
 
-  function removeTask(id: string) {
-    setData((prev) => ({ ...prev, tasks: prev.tasks.filter((t) => t.id !== id) }));
+  function goBack() {
+    setDirection(-1);
+    if (step === 1) {
+      setMode(null);
+    } else {
+      setStep(s => s - 1);
+    }
+  }
+
+  // Step routing
+  const TOTAL        = mode === "ai" ? 2 : 7;
+  const tasksStepNum = mode === "ai" ? 1 : 6;
+  const isLastStep   = step === TOTAL;
+  const canContinue  = step !== tasksStepNum || data.tasks.length > 0;
+
+  function renderStep() {
+    const props = { data, set };
+    if (mode === "manual") {
+      if (step === 1) return <Step1 {...props} />;
+      if (step === 2) return <Step2 {...props} />;
+      if (step === 3) return <Step3 {...props} />;
+      if (step === 4) return <Step4 {...props} />;
+      if (step === 5) return <Step5 {...props} />;
+      if (step === 6) return <TasksStep {...props} />;
+      if (step === 7) return <FreeTextStep {...props} />;
+    }
+    if (mode === "ai") {
+      if (step === 1) return <TasksStep {...props} />;
+      if (step === 2) return <FreeTextStep {...props} />;
+    }
+    return null;
   }
 
   async function handleGenerate() {
@@ -296,696 +925,126 @@ export default function SetupPage() {
     setErrMsg(null);
     setLoadingMsgIdx(0);
     try {
+      const weekStart = toLocalDateString(getNextMonday());
+      const serializedCommitments = data.fixed_commitments.map(c =>
+        JSON.stringify({ name: c.name, time: c.time, duration: c.duration, days: c.days })
+      );
+
       await savePreferences({
         user_id: USER_ID,
-        week_start_date: data.weekStartDate,
+        week_start_date: weekStart,
         sleep_target_hours: data.sleep_target_hours,
         preferred_bedtime: data.preferred_bedtime,
         preferred_wake_time: data.preferred_wake_time,
         morning_routine_mins: data.morning_routine_mins,
         night_routine_mins: data.night_routine_mins,
         shower_mins: data.shower_mins,
+        shower_preference: data.shower_preference,
         meals_per_day: data.meals_per_day,
+        meal_duration_mins: data.meal_duration_mins,
         meal_prep_days: data.meal_prep_days,
         gym_days_per_week: data.gym_days_per_week,
+        gym_duration_mins: data.gym_duration_mins,
         muay_thai_days_per_week: data.muay_thai_days_per_week,
-        commute_minutes: data.commute_minutes,
+        muay_thai_duration_mins: data.muay_thai_duration_mins,
+        workout_time_preference: data.workout_time_preference,
+        commute_minutes: data.is_remote ? 0 : data.commute_minutes,
         is_remote: data.is_remote,
-        fixed_commitments: [],
+        work_days_per_week: data.work_days_per_week,
+        work_location_name: data.work_location_name || null,
+        weekly_task_capacity_hours: data.weekly_task_capacity_hours,
+        energy_preference: data.energy_preference,
+        fixed_commitments: serializedCommitments,
         notes: null,
+        mode: mode ?? "manual",
+        extra_context: data.extra_context || null,
       });
+
       for (const task of data.tasks) {
         await createTask({
           user_id: USER_ID,
           title: task.title,
-          duration_minutes: task.durationMinutes,
+          duration_minutes: task.duration_minutes,
           deadline: null,
           priority: task.priority,
           energy_level: "medium",
           is_flexible: true,
+          timing_preference: task.timing_preference,
+          preferred_days: task.preferred_days.length > 0
+            ? JSON.stringify(task.preferred_days)
+            : null,
         });
       }
-      await generateSchedule(USER_ID, data.weekStartDate);
-      router.push("/week");
+
+      await generateSchedule(USER_ID, weekStart);
+      setGenerating(false);
+      setDone(true);
     } catch (e) {
       setErrMsg(String(e));
       setGenerating(false);
     }
   }
 
-  // Derived values
-  const weekOptions = getWeekOptions();
-  const draftMins = parseDurationToMinutes(draft.durationText);
-  const totalTaskMins = data.tasks.reduce((s, t) => s + t.durationMinutes, 0);
-  const freeHours = estimateFreeHours(data);
-  const taskHours = totalTaskMins / 60;
-  const isHeavy = taskHours > freeHours;
-
-  // ── Render ───────────────────────────────────────────────────────────────────
+  const animClass = direction === 1 ? "slide-enter-right" : "slide-enter-left";
+  const progress  = done ? 100 : mode === null ? 0 : (step / TOTAL) * 100;
 
   return (
-    <div className="max-w-[600px] pt-10 pb-20">
-
-      {/* ── Progress bar ────────────────────────────────────────────── */}
-      <div className="flex items-start mb-10">
-        {STEP_LABELS.map((label, i) => (
-          <React.Fragment key={label}>
-            {i > 0 && (
-              <div
-                className={`flex-1 h-px mt-[11px] transition-colors ${
-                  i < step ? "bg-[#6366f1]" : "bg-[#2a2a2a]"
-                }`}
-              />
-            )}
-            <div className="flex flex-col items-center gap-1.5">
-              <div
-                className={`w-[22px] h-[22px] rounded-full flex items-center justify-center text-[11px] font-semibold border-2 transition-all ${
-                  i + 1 <= step
-                    ? "bg-[#6366f1] border-[#6366f1] text-white"
-                    : "bg-[#0f0f0f] border-[#2a2a2a] text-[#555555]"
-                }`}
-              >
-                {i + 1 < step ? "✓" : i + 1}
-              </div>
-              <span
-                className={`text-[10px] whitespace-nowrap ${
-                  i + 1 <= step ? "text-[#888888]" : "text-[#555555]"
-                }`}
-              >
-                {label}
-              </span>
-            </div>
-          </React.Fragment>
-        ))}
+    <div
+      className="fixed inset-0 z-[60] bg-white overflow-y-auto"
+      style={{ fontFamily: "var(--font-dm-sans, DM Sans, system-ui, sans-serif)" }}
+    >
+      {/* Progress bar */}
+      <div className="fixed top-0 left-0 right-0 h-[3px] bg-gray-100 z-[70]">
+        <div className="h-full bg-gray-900 transition-all duration-500 ease-out" style={{ width: `${progress}%` }} />
       </div>
 
-      {/* ── Step indicator ──────────────────────────────────────────── */}
-      <p className="text-[12px] text-[#555555] mb-5">
-        Step {step} of 4 — {STEP_LABELS[step - 1]}
-      </p>
-
-      {/* ════════════════════════════════════════════════════════════ */}
-      {/* Step 1 — Your Week                                          */}
-      {/* ════════════════════════════════════════════════════════════ */}
-      {step === 1 && (
-        <div>
-          <h2 className="text-[22px] font-semibold text-[#f0f0f0] mb-1.5">
-            Which week are you planning?
-          </h2>
-          <p className="text-[14px] text-[#888888] mb-7">
-            We&apos;ll build your schedule around this window.
-          </p>
-
-          <div
-            className={`grid gap-3 ${
-              weekOptions.length > 1 ? "grid-cols-2" : "grid-cols-1 max-w-xs"
-            }`}
-          >
-            {weekOptions.map(({ label, monday }) => {
-              const dateStr = toLocalDateString(monday);
-              const selected = data.weekStartDate === dateStr;
-              return (
-                <button
-                  key={dateStr}
-                  type="button"
-                  onClick={() => setField("weekStartDate", dateStr)}
-                  className={`rounded-lg border-2 px-5 py-4 text-left transition-all ${
-                    selected
-                      ? "border-[#6366f1] bg-[#1e1b4b]/40"
-                      : "border-[#2a2a2a] bg-[#1a1a1a] hover:border-[#3a3a3a]"
-                  }`}
-                >
-                  <div
-                    className={`text-[11px] font-medium uppercase tracking-[0.06em] mb-1.5 ${
-                      selected ? "text-[#a5b4fc]" : "text-[#555555]"
-                    }`}
-                  >
-                    {label}
-                  </div>
-                  <div
-                    className={`text-[16px] font-semibold ${
-                      selected ? "text-[#f0f0f0]" : "text-[#888888]"
-                    }`}
-                  >
-                    {formatWeekRange(monday)}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+      {/* Step counter */}
+      {mode !== null && !done && (
+        <div className="fixed top-6 right-6 z-[70]">
+          <span className="text-[13px] text-gray-400 font-medium tabular-nums">{step} / {TOTAL}</span>
         </div>
       )}
 
-      {/* ════════════════════════════════════════════════════════════ */}
-      {/* Step 2 — Preferences                                        */}
-      {/* ════════════════════════════════════════════════════════════ */}
-      {step === 2 && (
-        <div>
-          <h2 className="text-[22px] font-semibold text-[#f0f0f0] mb-1.5">
-            Set your preferences
-          </h2>
-          <p className="text-[14px] text-[#888888] mb-8">
-            These shape your daily schedule every week.
-          </p>
-
-          <div className="space-y-8">
-            {/* Sleep */}
-            <SetupSection title="Sleep">
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className={LABEL}>Bedtime</label>
-                  <input
-                    type="time"
-                    className={INPUT}
-                    value={data.preferred_bedtime}
-                    onChange={(e) => setField("preferred_bedtime", e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={LABEL}>Wake time</label>
-                  <input
-                    type="time"
-                    className={INPUT}
-                    value={data.preferred_wake_time}
-                    onChange={(e) => setField("preferred_wake_time", e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={LABEL}>Target (hrs)</label>
-                  <input
-                    type="number"
-                    min="6"
-                    max="10"
-                    step="0.5"
-                    className={INPUT}
-                    value={data.sleep_target_hours}
-                    onChange={(e) =>
-                      setField("sleep_target_hours", Number(e.target.value))
-                    }
-                  />
-                </div>
-              </div>
-            </SetupSection>
-
-            {/* Routines */}
-            <SetupSection title="Routines">
-              {(
-                [
-                  { key: "morning_routine_mins", label: "Morning routine", min: 15, max: 90 },
-                  { key: "night_routine_mins",   label: "Night routine",   min: 10, max: 60 },
-                  { key: "shower_mins",          label: "Shower",          min: 5,  max: 30 },
-                ] as const
-              ).map(({ key, label, min, max }) => (
-                <div key={key} className="flex items-center gap-4">
-                  <label className="text-[13px] text-[#888888] w-36 shrink-0">
-                    {label}
-                  </label>
-                  <input
-                    type="range"
-                    min={min}
-                    max={max}
-                    step="5"
-                    className="flex-1 h-1 accent-[#6366f1]"
-                    value={data[key]}
-                    onChange={(e) => setField(key, Number(e.target.value))}
-                  />
-                  <span className="text-[13px] text-[#555555] w-14 text-right tabular-nums">
-                    {data[key]} min
-                  </span>
-                </div>
-              ))}
-            </SetupSection>
-
-            {/* Meals */}
-            <SetupSection title="Meals">
-              <div>
-                <label className={LABEL}>Meals per day</label>
-                <div className="flex gap-2">
-                  {[1, 2, 3, 4].map((n) => (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => setField("meals_per_day", n)}
-                      className={`w-9 h-9 rounded-md text-[13px] font-medium transition-colors ${
-                        data.meals_per_day === n
-                          ? "bg-[#6366f1] text-white"
-                          : "bg-[#1a1a1a] border border-[#2a2a2a] text-[#888888] hover:border-[#3a3a3a]"
-                      }`}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className={LABEL}>Meal prep days</label>
-                <div className="flex gap-2 flex-wrap">
-                  {DAYS_SHORT.map((short, i) => {
-                    const full = DAYS_FULL[i];
-                    const active = data.meal_prep_days.includes(full);
-                    return (
-                      <button
-                        key={full}
-                        type="button"
-                        onClick={() => toggleDay(full)}
-                        className={`px-3 py-1 rounded text-[12px] font-medium transition-colors ${
-                          active
-                            ? "bg-[#1e1b4b] text-[#818cf8]"
-                            : "bg-[#1a1a1a] border border-[#2a2a2a] text-[#555555] hover:border-[#3a3a3a]"
-                        }`}
-                      >
-                        {short}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </SetupSection>
-
-            {/* Fitness */}
-            <SetupSection title="Fitness">
-              {(
-                [
-                  { key: "gym_days_per_week",       label: "Gym days / week" },
-                  { key: "muay_thai_days_per_week",  label: "Muay Thai days / week" },
-                ] as const
-              ).map(({ key, label }) => (
-                <div key={key} className="flex items-center gap-4">
-                  <label className="text-[13px] text-[#888888] w-44 shrink-0">
-                    {label}
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setField(key, Math.max(0, data[key] - 1))}
-                      className="w-8 h-8 rounded bg-[#2a2a2a] text-[#f0f0f0] hover:bg-[#3a3a3a] transition-colors text-[18px] flex items-center justify-center"
-                    >
-                      −
-                    </button>
-                    <span className="text-[#f0f0f0] font-semibold w-5 text-center tabular-nums">
-                      {data[key]}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setField(key, Math.min(7, data[key] + 1))}
-                      className="w-8 h-8 rounded bg-[#2a2a2a] text-[#f0f0f0] hover:bg-[#3a3a3a] transition-colors text-[18px] flex items-center justify-center"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </SetupSection>
-
-            {/* Commute */}
-            <SetupSection title="Commute">
-              <div className="flex items-end gap-6">
-                <div className="flex-1">
-                  <label className={LABEL}>One-way commute (minutes)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="180"
-                    className={INPUT}
-                    value={data.commute_minutes}
-                    onChange={(e) =>
-                      setField("commute_minutes", Number(e.target.value))
-                    }
-                  />
-                </div>
-                <div className="flex items-center gap-3 pb-0.5">
-                  <button
-                    type="button"
-                    aria-label="Toggle remote work"
-                    onClick={() => setField("is_remote", !data.is_remote)}
-                    className={`relative w-10 h-5 rounded-full transition-colors ${
-                      data.is_remote ? "bg-[#6366f1]" : "bg-[#2a2a2a]"
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
-                        data.is_remote ? "translate-x-5" : "translate-x-0.5"
-                      }`}
-                    />
-                  </button>
-                  <span className="text-[13px] text-[#888888] whitespace-nowrap">
-                    Remote work
-                  </span>
-                </div>
-              </div>
-            </SetupSection>
+      {/* Content */}
+      <div className="min-h-screen flex flex-col items-center justify-center px-6 py-24">
+        {done ? (
+          <DoneScreen />
+        ) : mode === null ? (
+          <ModeScreen onSelect={selectMode} />
+        ) : (
+          <div key={`${mode}-${step}`} className={`w-full ${animClass}`}>
+            {renderStep()}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* ════════════════════════════════════════════════════════════ */}
-      {/* Step 3 — Tasks                                              */}
-      {/* ════════════════════════════════════════════════════════════ */}
-      {step === 3 && (
-        <div>
-          <h2 className="text-[22px] font-semibold text-[#f0f0f0] mb-1.5">
-            What do you need to get done?
-          </h2>
-          <p className="text-[14px] text-[#888888] mb-7">
-            Add everything on your plate. Sunday will fit it into your schedule.
-          </p>
-
-          {/* Task cards */}
-          {data.tasks.length > 0 && (
-            <div className="space-y-2 mb-4">
-              {data.tasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="flex items-center gap-3 bg-[#1a1a1a] border border-[#2a2a2a] border-l-[3px] rounded-lg px-4 py-3"
-                  style={{ borderLeftColor: PRIORITY_BORDER[task.priority] }}
-                >
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[14px] font-medium text-[#f0f0f0] block truncate">
-                      {task.title}
-                    </span>
-                    {task.deadlineText && (
-                      <span className="text-[11px] text-[#555555]">
-                        Due: {task.deadlineText}
-                      </span>
-                    )}
-                  </div>
-                  <span className="shrink-0 text-[11px] bg-[#2a2a2a] text-[#888888] px-2 py-0.5 rounded tabular-nums">
-                    {formatMinutes(task.durationMinutes)}
-                  </span>
-                  <span
-                    className="shrink-0 text-[11px] px-2 py-0.5 rounded capitalize"
-                    style={{
-                      backgroundColor: PRIORITY_BADGE_BG[task.priority],
-                      color: PRIORITY_BADGE_COLOR[task.priority],
-                    }}
-                  >
-                    {task.priority}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeTask(task.id)}
-                    className="shrink-0 w-5 h-5 flex items-center justify-center text-[#555555] hover:text-[#f87171] transition-colors text-[18px] leading-none ml-1"
-                    aria-label="Remove task"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Empty state */}
-          {data.tasks.length === 0 && !showTaskForm && (
-            <div className="py-10 text-center border border-dashed border-[#2a2a2a] rounded-lg mb-4">
-              <p className="text-[13px] text-[#555555]">
-                No tasks yet — this week might just be routines.
-              </p>
-            </div>
-          )}
-
-          {/* Inline add form */}
-          {showTaskForm && (
-            <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4 mb-4 space-y-3">
-              <div>
-                <label className={LABEL}>Task name</label>
-                <input
-                  type="text"
-                  autoFocus
-                  className={INPUT}
-                  placeholder="e.g. Finish project proposal"
-                  value={draft.title}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, title: e.target.value }))
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.preventDefault();
-                  }}
-                />
-              </div>
-
-              <div>
-                <label className={LABEL}>Duration</label>
-                <input
-                  type="text"
-                  className={INPUT}
-                  placeholder="e.g. 90 mins, 2 hours"
-                  value={draft.durationText}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, durationText: e.target.value }))
-                  }
-                />
-                {draft.durationText && (
-                  <p
-                    className="text-[11px] mt-1 tabular-nums"
-                    style={{
-                      color: draftMins !== null ? "#a5b4fc" : "#f87171",
-                    }}
-                  >
-                    {draftMins !== null
-                      ? `= ${draftMins} minutes`
-                      : "Couldn't parse — try \"90 mins\" or \"2 hours\""}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className={LABEL}>Priority</label>
-                <div className="flex gap-2 flex-wrap">
-                  {PRIORITIES.map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setDraft((d) => ({ ...d, priority: p }))}
-                      className={`px-3 py-1 rounded text-[12px] font-medium border transition-colors capitalize ${
-                        draft.priority === p
-                          ? PRIORITY_PILL_ACTIVE[p]
-                          : "bg-[#1a1a1a] border-[#2a2a2a] text-[#555555] hover:border-[#3a3a3a]"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className={LABEL}>Deadline</label>
-                <input
-                  type="text"
-                  className={INPUT}
-                  placeholder="e.g. Wednesday, May 29, no deadline"
-                  value={draft.deadlineText}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, deadlineText: e.target.value }))
-                  }
-                />
-                <p className="text-[11px] text-[#555555] mt-1">
-                  Exact date resolved automatically
-                </p>
-              </div>
-
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={addTask}
-                  disabled={!draft.title.trim() || draftMins === null}
-                  className="h-8 px-4 rounded-md text-[13px] font-medium bg-[#6366f1] text-white hover:bg-[#4f46e5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  Add to list
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowTaskForm(false);
-                    setDraft(DEFAULT_DRAFT);
-                  }}
-                  className="h-8 px-4 rounded-md text-[13px] text-[#888888] border border-[#2a2a2a] hover:border-[#3a3a3a] hover:text-[#f0f0f0] transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {!showTaskForm && (
-            <button
-              type="button"
-              onClick={() => setShowTaskForm(true)}
-              className="flex items-center gap-1.5 text-[13px] text-[#6366f1] hover:text-[#818cf8] transition-colors"
-            >
-              <span className="text-[17px] leading-none">+</span>
-              Add task
+      {/* Navigation bar — only when mode is set and not done */}
+      {mode !== null && !done && (
+        <div className="fixed bottom-0 left-0 right-0 px-6 pb-8 pt-4 bg-white border-t border-gray-100">
+          <div className="max-w-lg mx-auto flex items-center justify-between gap-4">
+            <button type="button" onClick={goBack} disabled={generating}
+              className="px-5 py-3 rounded-xl text-[15px] font-medium text-gray-500 border border-gray-200 hover:border-gray-400 hover:text-gray-700 transition-all disabled:opacity-30">
+              ← Back
             </button>
-          )}
-        </div>
-      )}
 
-      {/* ════════════════════════════════════════════════════════════ */}
-      {/* Step 4 — Review                                             */}
-      {/* ════════════════════════════════════════════════════════════ */}
-      {step === 4 && (
-        <div>
-          <h2 className="text-[22px] font-semibold text-[#f0f0f0] mb-1.5">
-            Your week at a glance
-          </h2>
-          <p className="text-[14px] text-[#888888] mb-7">
-            Review everything before we build your schedule.
-          </p>
-
-          {/* Summary card */}
-          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg divide-y divide-[#2a2a2a] mb-4">
-            {/* Week dates */}
-            <div className="flex items-center justify-between px-5 py-3.5">
-              <span className="text-[11px] text-[#888888] uppercase tracking-[0.06em]">
-                Week
-              </span>
-              <span className="text-[14px] text-[#f0f0f0]">
-                {formatWeekRange(new Date(data.weekStartDate + "T12:00:00"))}
-              </span>
-            </div>
-
-            {/* Sleep */}
-            <div className="flex items-center justify-between px-5 py-3.5">
-              <span className="text-[11px] text-[#888888] uppercase tracking-[0.06em]">
-                Sleep
-              </span>
-              <span className="text-[14px] text-[#f0f0f0] tabular-nums">
-                {data.preferred_bedtime} → {data.preferred_wake_time}
-                <span className="text-[#555555] ml-2">
-                  ({data.sleep_target_hours}h)
-                </span>
-              </span>
-            </div>
-
-            {/* Workouts */}
-            <div className="flex items-center justify-between px-5 py-3.5">
-              <span className="text-[11px] text-[#888888] uppercase tracking-[0.06em]">
-                Workouts
-              </span>
-              <span className="text-[14px] text-[#f0f0f0]">
-                {data.gym_days_per_week} gym + {data.muay_thai_days_per_week} Muay Thai
-              </span>
-            </div>
-
-            {/* Tasks */}
-            <div className="px-5 py-3.5">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] text-[#888888] uppercase tracking-[0.06em]">
-                  Tasks
-                </span>
-                <span className="text-[14px] text-[#f0f0f0]">
-                  {data.tasks.length} task{data.tasks.length !== 1 ? "s" : ""}
-                  {data.tasks.length > 0 && (
-                    <span className="text-[#555555] ml-2">
-                      ({formatMinutes(totalTaskMins)} total)
-                    </span>
-                  )}
-                </span>
-              </div>
-              {data.tasks.length > 0 ? (
-                <div className="space-y-1.5 mt-2">
-                  {data.tasks.map((task) => (
-                    <div key={task.id} className="flex items-center gap-2.5">
-                      <div
-                        className="w-1.5 h-1.5 rounded-full shrink-0"
-                        style={{ backgroundColor: PRIORITY_BORDER[task.priority] }}
-                      />
-                      <span className="text-[13px] text-[#888888] flex-1 truncate">
-                        {task.title}
-                      </span>
-                      <span className="text-[11px] text-[#555555] tabular-nums shrink-0">
-                        {formatMinutes(task.durationMinutes)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[13px] text-[#555555]">
-                  No tasks — routine-only week
-                </p>
-              )}
-            </div>
+            {isLastStep ? (
+              <button type="button" onClick={handleGenerate} disabled={generating}
+                className="flex-1 sm:flex-none sm:min-w-[200px] px-6 py-3 rounded-xl text-[15px] font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                {generating ? LOADING_MESSAGES[loadingMsgIdx] : "Generate my week →"}
+              </button>
+            ) : (
+              <button type="button" onClick={goNext} disabled={!canContinue}
+                className="flex-1 sm:flex-none sm:min-w-[160px] px-6 py-3 rounded-xl text-[15px] font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                Continue →
+              </button>
+            )}
           </div>
 
-          {/* Free time line */}
-          {data.tasks.length > 0 && (
-            <p className="text-[12px] text-[#555555] mb-3 tabular-nums">
-              ~{freeHours}h estimated free time · {taskHours.toFixed(1)}h of tasks
-            </p>
-          )}
-
-          {/* Overload warning */}
-          {isHeavy && (
-            <div className="rounded-lg border border-[#d97706]/30 bg-[#78350f]/20 px-4 py-3 text-[13px] text-[#fcd34d] mb-4">
-              You have {taskHours.toFixed(1)}h of tasks in a week with ~{freeHours}h
-              of free time. Consider reducing or lowering some priorities.
-            </div>
-          )}
-
-          {/* Error */}
           {errMsg && (
-            <div className="rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] px-4 py-3 text-[13px] text-[#f87171] mb-4">
+            <div className="max-w-lg mx-auto mt-3 px-4 py-2.5 rounded-xl bg-red-50 border border-red-100 text-[13px] text-red-600">
               {errMsg}
             </div>
           )}
-
-          {/* Generate button */}
-          <button
-            type="button"
-            disabled={generating}
-            onClick={handleGenerate}
-            className={`w-full h-11 rounded-lg text-[14px] font-semibold text-white flex items-center justify-center gap-2 transition-colors ${
-              generating
-                ? "bg-[#6366f1] opacity-70 animate-pulse cursor-not-allowed"
-                : "bg-[#6366f1] hover:bg-[#4f46e5]"
-            }`}
-          >
-            {generating ? LOADING_MESSAGES[loadingMsgIdx] : "Generate My Week →"}
-          </button>
-        </div>
-      )}
-
-      {/* ── Navigation (steps 1–3) ───────────────────────────────── */}
-      {step < 4 && (
-        <div className="flex items-center justify-between mt-10 pt-6 border-t border-[#2a2a2a]">
-          {step > 1 ? (
-            <button
-              type="button"
-              onClick={() => setStep((s) => s - 1)}
-              className="h-9 px-4 rounded-md text-[13px] text-[#888888] border border-[#2a2a2a] hover:border-[#3a3a3a] hover:text-[#f0f0f0] transition-colors"
-            >
-              ← Back
-            </button>
-          ) : (
-            <div />
-          )}
-
-          <button
-            type="button"
-            onClick={() => {
-              if (step === 3 && showTaskForm) {
-                setShowTaskForm(false);
-                setDraft(DEFAULT_DRAFT);
-              }
-              setStep((s) => s + 1);
-            }}
-            className="h-9 px-5 rounded-md text-[13px] font-medium bg-[#6366f1] text-white hover:bg-[#4f46e5] transition-colors"
-          >
-            {step === 1 ? "Looks good, continue →" : "Continue →"}
-          </button>
-        </div>
-      )}
-
-      {/* Back link on step 4 */}
-      {step === 4 && !generating && (
-        <div className="mt-5">
-          <button
-            type="button"
-            onClick={() => setStep(3)}
-            className="text-[13px] text-[#555555] hover:text-[#888888] transition-colors"
-          >
-            ← Back to Tasks
-          </button>
         </div>
       )}
     </div>

@@ -20,3 +20,14 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Database
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+
+# Logs
+backend/*.log
+
+# Playwright
+.playwright-mcp/

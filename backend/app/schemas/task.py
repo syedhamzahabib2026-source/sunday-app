@@ -16,6 +16,8 @@ class TaskCreate(BaseModel):
     location: Optional[str] = None
     energy_level: EnergyType
     is_flexible: bool = True
+    timing_preference: Optional[str] = "ai_decide"
+    preferred_days: Optional[str] = None  # JSON-encoded list
 
 
 class TaskStatusUpdate(BaseModel):
@@ -33,6 +35,8 @@ class TaskResponse(BaseModel):
     energy_level: str
     is_flexible: bool
     status: str
+    timing_preference: Optional[str]
+    preferred_days: Optional[str]
     created_at: datetime
     updated_at: datetime
 
