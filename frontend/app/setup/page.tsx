@@ -105,7 +105,7 @@ function fmt12(t: string): string {
 }
 
 function calcSleepHours(bed: string, wake: string): number {
-  let b = timeToMins(bed), w = timeToMins(wake);
+  const b = timeToMins(bed); let w = timeToMins(wake);
   if (w <= b) w += 1440;
   return Math.round((w - b) / 6) / 10;
 }
