@@ -10,15 +10,8 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+        sans: ["var(--font-dm-sans)", "DM Sans", "system-ui", "sans-serif"],
         "dm-sans": ["var(--font-dm-sans)", "DM Sans", "system-ui", "sans-serif"],
-      },
-      colors: {
-        bg: "#0f0f0f",
-        surface: "#1a1a1a",
-        "app-border": "#2a2a2a",
-        accent: "#6366f1",
-        "accent-hover": "#4f46e5",
       },
     },
   },

@@ -24,7 +24,7 @@ The primary interface is a **Slack bot** driven by natural language. A **web das
 ## Tech Stack
 
 ### Backend
-- **Python 3.x** with **FastAPI 0.136** — REST API, port 8000 (local) / `$PORT` (Railway)
+- **Python 3.x** with **FastAPI 0.136** — REST API, port 8080 (local) / `$PORT` (Railway)
 - **SQLAlchemy 2.0** — ORM, supports SQLite (local dev) and PostgreSQL (production)
 - **SQLite** locally (`backend/sunday.db`), **PostgreSQL** on Railway
 - **slack-bolt 1.28** — Slack Socket Mode bot
@@ -544,13 +544,13 @@ Base URL: `https://sunday-app-production-d774.up.railway.app/api/v1`
 | `SLACK_SIGNING_SECRET` | Yes | From Slack app → Basic Information |
 | `SLACK_APP_TOKEN` | Yes | `xapp-...` from Slack app → Socket Mode (enables bot socket connection) |
 | `ANTHROPIC_API_KEY` | Yes | For Claude intent parsing and date/duration extraction |
-| `API_BASE_URL` | Yes (bot) | Full URL to FastAPI, e.g. `https://sunday-app-production-d774.up.railway.app/api/v1`. Bot defaults to `http://localhost:8000/api/v1` if unset. |
+| `API_BASE_URL` | Yes (bot) | Full URL to FastAPI, e.g. `https://sunday-app-production-d774.up.railway.app/api/v1`. Bot defaults to `http://localhost:8080/api/v1` if unset. |
 | `ALLOWED_ORIGINS` | Optional | Comma-separated additional CORS origins. `https://sunday-app.pages.dev` and `localhost:3000/3001` are always allowed hardcoded. |
 
 ### Frontend (Cloudflare Pages)
 | Variable | Required | Description |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | Yes | Railway backend URL without `/api/v1`, e.g. `https://sunday-app-production-d774.up.railway.app`. Falls back to `http://localhost:8000` if unset. |
+| `NEXT_PUBLIC_API_URL` | Yes | Railway backend URL without `/api/v1`, e.g. `https://sunday-app-production-d774.up.railway.app`. Falls back to `http://localhost:8080` if unset. |
 
 ---
 

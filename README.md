@@ -12,7 +12,7 @@ sunday-app/
 │   │   ├── routers/    # FastAPI route handlers
 │   │   ├── engines/    # AI/planning logic engines
 │   │   └── slack/      # Slack Bolt event handlers
-│   ├── main.py         # App entrypoint (port 8000)
+│   ├── main.py         # App entrypoint (port 8080)
 │   ├── requirements.txt
 │   └── .env.example
 └── frontend/       # Next.js 14 app (TypeScript + Tailwind + shadcn/ui)
@@ -29,13 +29,13 @@ venv\Scripts\activate        # Windows
 # source venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt
 cp .env.example .env         # fill in your credentials
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8080
 ```
 
 ### Health check
 
 ```
-GET http://localhost:8000/health
+GET http://localhost:8080/health
 → {"status": "ok"}
 ```
 

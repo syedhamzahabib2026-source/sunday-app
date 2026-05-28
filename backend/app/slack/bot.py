@@ -19,7 +19,7 @@ app = App(
     signing_secret=os.environ["SLACK_SIGNING_SECRET"],
 )
 
-BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
+BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8080/api/v1")
 USER_ID = 1
 
 # Keyed by Slack user_id: {"flow": str, "step": str, "data": dict}

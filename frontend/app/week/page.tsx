@@ -3,12 +3,8 @@
 import { useEffect, useState } from "react";
 import DayColumn from "@/components/DayColumn";
 import {
-  getWeekSchedule,
-  getArchivedSchedules,
-  getArchivedWeekBlocks,
-  deleteArchivedSchedule,
-  ScheduleBlock,
-  ScheduleRecord,
+  getWeekSchedule, getArchivedSchedules, getArchivedWeekBlocks,
+  deleteArchivedSchedule, ScheduleBlock, ScheduleRecord,
 } from "@/lib/api";
 
 const USER_ID = 1;
@@ -36,11 +32,18 @@ function addWeeks(d: Date, n: number): Date {
   return result;
 }
 
-function formatWeekLabel(monday: Date): string {
-  return monday.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-  });
+function formatWeekRange(monday: Date): string {
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const start = monday.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const end = sunday.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${start} – ${end}`;
+}
+
+function blockDurationMin(b: ScheduleBlock): number {
+  const [sh, sm] = b.start_time.split(":").map(Number);
+  const [eh, em] = b.end_time.split(":").map(Number);
+  return eh * 60 + em - (sh * 60 + sm);
 }
 
 export default function WeekPage() {
@@ -49,7 +52,6 @@ export default function WeekPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Archived weeks
   const [archivedSchedules, setArchivedSchedules] = useState<ScheduleRecord[]>([]);
   const [viewingArchive, setViewingArchive] = useState<ScheduleRecord | null>(null);
   const [archiveBlocks, setArchiveBlocks] = useState<ScheduleBlock[]>([]);
@@ -69,9 +71,7 @@ export default function WeekPage() {
   }, [weekStart]);
 
   useEffect(() => {
-    getArchivedSchedules(USER_ID)
-      .then(setArchivedSchedules)
-      .catch(() => {});
+    getArchivedSchedules(USER_ID).then(setArchivedSchedules).catch(() => {});
   }, []);
 
   function handleViewArchive(rec: ScheduleRecord) {
@@ -101,89 +101,109 @@ export default function WeekPage() {
     return d;
   });
 
+  // Weekly summary stats
+  const taskBlocks = blocks.filter((b) => b.block_type === "task");
+  const totalHours = Math.round(blocks.reduce((s, b) => s + blockDurationMin(b), 0) / 60 * 10) / 10;
+
   return (
-    <div className="pt-6">
-      {/* Navigation row */}
-      <div className="flex items-center justify-center gap-3 mb-1">
-        <button
-          onClick={() => setWeekStart((prev) => addWeeks(prev, -1))}
-          className="text-[13px] text-[#888888] hover:text-[#f0f0f0] transition-colors px-2 py-1"
-        >
-          ← Prev
-        </button>
-        <button
-          onClick={() => setWeekStart(getMonday(new Date()))}
-          className="text-[13px] text-[#888888] hover:text-[#f0f0f0] transition-colors px-2 py-1"
-        >
-          Today
-        </button>
-        <button
-          onClick={() => setWeekStart((prev) => addWeeks(prev, 1))}
-          className="text-[13px] text-[#888888] hover:text-[#f0f0f0] transition-colors px-2 py-1"
-        >
-          Next →
-        </button>
+    <div className="px-4 sm:px-6 pt-7 pb-16 max-w-7xl mx-auto">
+      {/* Header row */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div>
+          <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Week</p>
+          <h1 className="text-[20px] font-semibold text-zinc-900">{formatWeekRange(weekStart)}</h1>
+        </div>
+        <div className="flex items-center gap-1 bg-zinc-50 border border-zinc-200 rounded-xl p-1 self-start sm:self-auto">
+          <button
+            onClick={() => setWeekStart((p) => addWeeks(p, -1))}
+            className="text-[13px] font-medium text-zinc-500 hover:text-zinc-900 hover:bg-white px-3 py-1.5 rounded-lg transition-all"
+          >
+            ← Prev
+          </button>
+          <button
+            onClick={() => setWeekStart(getMonday(new Date()))}
+            className="text-[13px] font-medium text-zinc-500 hover:text-zinc-900 hover:bg-white px-3 py-1.5 rounded-lg transition-all"
+          >
+            Today
+          </button>
+          <button
+            onClick={() => setWeekStart((p) => addWeeks(p, 1))}
+            className="text-[13px] font-medium text-zinc-500 hover:text-zinc-900 hover:bg-white px-3 py-1.5 rounded-lg transition-all"
+          >
+            Next →
+          </button>
+        </div>
       </div>
 
-      {/* Week label */}
-      <p className="text-center text-[13px] text-[#555555] mb-4">
-        Week of {formatWeekLabel(weekStart)}
-      </p>
+      {/* Weekly summary strip */}
+      {!loading && !error && blocks.length > 0 && (
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          <div className="bg-white border border-zinc-200 rounded-xl px-4 py-3 shadow-sm">
+            <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-1">Total blocks</p>
+            <p className="text-[20px] font-semibold text-zinc-900">{blocks.length}</p>
+          </div>
+          <div className="bg-white border border-zinc-200 rounded-xl px-4 py-3 shadow-sm">
+            <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-1">Tasks scheduled</p>
+            <p className="text-[20px] font-semibold text-zinc-900">{taskBlocks.length}</p>
+          </div>
+          <div className="bg-white border border-zinc-200 rounded-xl px-4 py-3 shadow-sm">
+            <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wide mb-1">Hours planned</p>
+            <p className="text-[20px] font-semibold text-indigo-600">{totalHours}h</p>
+          </div>
+        </div>
+      )}
 
       {/* Loading */}
       {loading && (
-        <div className="flex items-center justify-center gap-2 py-16 text-[#555555]">
-          <div className="w-3.5 h-3.5 border-2 border-[#2a2a2a] border-t-[#555555] rounded-full animate-spin" />
-          <span className="text-[13px]">Loading week...</span>
+        <div className="flex items-center gap-3 py-16 text-zinc-400">
+          <div className="w-4 h-4 border-2 border-zinc-200 border-t-indigo-600 rounded-full animate-spin" />
+          <span className="text-[14px]">Loading week...</span>
         </div>
       )}
 
       {/* Error */}
       {!loading && error && (
-        <div className="rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] px-4 py-3 text-[13px] text-[#f87171]">
+        <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-[13px] text-red-700">
           {error}
         </div>
       )}
 
       {/* 7-column grid */}
       {!loading && !error && (
-        <div className="grid grid-cols-7 gap-px bg-[#2a2a2a] rounded-lg overflow-hidden min-w-[700px]">
-          {days.map((d, i) => {
-            const dateStr = toLocalDateString(d);
-            const dayBlocks = blocksByDay[dateStr] ?? [];
-            const label = `${DAY_LABELS[i]} ${d.getDate()}`;
-            return (
-              <div key={dateStr} className="bg-[#0f0f0f]">
-                <DayColumn
-                  day={label}
-                  date={dateStr}
-                  blocks={dayBlocks}
-                  isToday={dateStr === todayStr}
-                />
-              </div>
-            );
-          })}
+        <div className="border border-zinc-200 rounded-2xl overflow-hidden min-w-[700px] shadow-sm">
+          <div className="grid grid-cols-7">
+            {days.map((d, i) => {
+              const dateStr = toLocalDateString(d);
+              return (
+                <div key={dateStr} className="border-r border-zinc-200 last:border-r-0">
+                  <DayColumn
+                    day={`${DAY_LABELS[i]} ${d.getDate()}`}
+                    date={dateStr}
+                    blocks={blocksByDay[dateStr] ?? []}
+                    isToday={dateStr === todayStr}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
       {/* ── Archived weeks ── */}
       {archivedSchedules.length > 0 && (
-        <div className="mt-10">
-          <p className="text-[12px] text-[#555555] uppercase tracking-widest mb-3">
-            Past Weeks
-          </p>
+        <div className="mt-12">
+          <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-4">Past Weeks</p>
 
-          {/* Archive list */}
-          <div className="flex flex-col gap-1 mb-4">
+          <div className="flex flex-col gap-1.5 mb-5">
             {archivedSchedules.map((rec) => (
               <div
                 key={rec.id}
-                className="flex items-center justify-between px-3 py-2 rounded-md bg-[#1a1a1a] border border-[#2a2a2a]"
+                className="flex items-center justify-between px-4 py-3 rounded-xl bg-white border border-zinc-200 hover:border-zinc-300 transition-colors"
               >
                 <button
                   onClick={() => handleViewArchive(rec)}
-                  className={`text-[13px] hover:text-[#f0f0f0] transition-colors ${
-                    viewingArchive?.id === rec.id ? "text-[#f0f0f0]" : "text-[#888888]"
+                  className={`text-[14px] font-medium transition-colors ${
+                    viewingArchive?.id === rec.id ? "text-zinc-900" : "text-zinc-500 hover:text-zinc-900"
                   }`}
                 >
                   {rec.week_label ?? rec.week_start_date}
@@ -191,16 +211,16 @@ export default function WeekPage() {
                 <div className="flex items-center gap-2">
                   {confirmDelete === rec.id ? (
                     <>
-                      <span className="text-[11px] text-[#f87171]">Delete?</span>
+                      <span className="text-[12px] text-red-600 font-medium">Delete?</span>
                       <button
                         onClick={() => handleDeleteArchive(rec.id)}
-                        className="text-[11px] text-[#f87171] hover:text-white transition-colors px-2"
+                        className="text-[12px] font-semibold text-red-700 hover:text-red-900 px-2 py-0.5 bg-red-50 rounded-md border border-red-200 transition-colors"
                       >
                         Yes
                       </button>
                       <button
                         onClick={() => setConfirmDelete(null)}
-                        className="text-[11px] text-[#555555] hover:text-[#888888] transition-colors"
+                        className="text-[12px] font-medium text-zinc-400 hover:text-zinc-600 transition-colors"
                       >
                         No
                       </button>
@@ -208,8 +228,7 @@ export default function WeekPage() {
                   ) : (
                     <button
                       onClick={() => setConfirmDelete(rec.id)}
-                      className="text-[11px] text-[#3a3a3a] hover:text-[#f87171] transition-colors px-1"
-                      title="Delete archived week"
+                      className="text-[12px] text-zinc-300 hover:text-red-600 w-6 h-6 flex items-center justify-center rounded hover:bg-red-50 transition-colors"
                     >
                       ✕
                     </button>
@@ -219,47 +238,50 @@ export default function WeekPage() {
             ))}
           </div>
 
-          {/* Archive week viewer (read-only) */}
           {viewingArchive && (
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[13px] text-[#555555]">
-                  {viewingArchive.week_label ?? viewingArchive.week_start_date}
-                  <span className="ml-2 text-[11px] text-[#3a3a3a]">read-only</span>
-                </p>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <p className="text-[14px] font-semibold text-zinc-900">
+                    {viewingArchive.week_label ?? viewingArchive.week_start_date}
+                  </p>
+                  <span className="text-[11px] font-medium text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">
+                    read-only
+                  </span>
+                </div>
                 <button
                   onClick={() => setViewingArchive(null)}
-                  className="text-[12px] text-[#555555] hover:text-[#888888] transition-colors"
+                  className="text-[13px] font-medium text-zinc-400 hover:text-zinc-600 transition-colors"
                 >
                   Close
                 </button>
               </div>
 
               {archiveLoading ? (
-                <div className="flex items-center gap-2 py-8 text-[#555555]">
-                  <div className="w-3 h-3 border-2 border-[#2a2a2a] border-t-[#555555] rounded-full animate-spin" />
-                  <span className="text-[12px]">Loading archive...</span>
+                <div className="flex items-center gap-3 py-8 text-zinc-400">
+                  <div className="w-4 h-4 border-2 border-zinc-200 border-t-indigo-600 rounded-full animate-spin" />
+                  <span className="text-[13px]">Loading archive...</span>
                 </div>
               ) : (
-                <div className="grid grid-cols-7 gap-px bg-[#2a2a2a] rounded-lg overflow-hidden min-w-[700px] opacity-70 pointer-events-none select-none">
-                  {Array.from({ length: 7 }, (_, i) => {
-                    const ws = new Date(viewingArchive.week_start_date + "T00:00:00");
-                    const d = new Date(ws);
-                    d.setDate(ws.getDate() + i);
-                    const dateStr = toLocalDateString(d);
-                    const dayBlocks = archiveBlocks.filter((b) => b.date === dateStr);
-                    const label = `${DAY_LABELS[i]} ${d.getDate()}`;
-                    return (
-                      <div key={dateStr} className="bg-[#0f0f0f]">
-                        <DayColumn
-                          day={label}
-                          date={dateStr}
-                          blocks={dayBlocks}
-                          isToday={false}
-                        />
-                      </div>
-                    );
-                  })}
+                <div className="border border-zinc-200 rounded-2xl overflow-hidden min-w-[700px] opacity-60 pointer-events-none select-none">
+                  <div className="grid grid-cols-7">
+                    {Array.from({ length: 7 }, (_, i) => {
+                      const ws = new Date(viewingArchive.week_start_date + "T00:00:00");
+                      const d = new Date(ws);
+                      d.setDate(ws.getDate() + i);
+                      const dateStr = toLocalDateString(d);
+                      return (
+                        <div key={dateStr} className="border-r border-zinc-200 last:border-r-0">
+                          <DayColumn
+                            day={`${DAY_LABELS[i]} ${d.getDate()}`}
+                            date={dateStr}
+                            blocks={archiveBlocks.filter((b) => b.date === dateStr)}
+                            isToday={false}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>

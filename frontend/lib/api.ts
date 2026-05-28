@@ -1,4 +1,4 @@
-const BASE = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/v1`;
+const BASE = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080"}/api/v1`;
 
 export type BlockType =
   | "task"
@@ -8,7 +8,8 @@ export type BlockType =
   | "gym"
   | "muay_thai"
   | "routine"
-  | "buffer";
+  | "buffer"
+  | "event";
 
 export interface ScheduleBlock {
   id: number;
@@ -185,4 +186,27 @@ export function getArchivedWeekBlocks(userId: number, weekStart: string): Promis
 
 export function deleteArchivedSchedule(scheduleId: number): Promise<void> {
   return apiFetch(`/schedules/${scheduleId}`, { method: "DELETE" });
+}
+
+export interface CompletionRecord {
+  id: number;
+  user_id: number;
+  schedule_block_id: number;
+  task_id: number | null;
+  status: string;
+  completed_at: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export function getCompletions(userId: number): Promise<CompletionRecord[]> {
+  return apiFetch(`/completions/${userId}`);
+}
+
+export function getAllTasks(userId: number): Promise<Task[]> {
+  return apiFetch(`/tasks/${userId}`);
+}
+
+export function getAllSchedules(userId: number): Promise<ScheduleRecord[]> {
+  return apiFetch(`/schedules/${userId}/all`);
 }

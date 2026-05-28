@@ -212,7 +212,7 @@ function Chips<T extends string>({ options, value, onChange, multi = false }: {
       {options.map(opt => (
         <button key={opt.value} type="button" onClick={() => toggle(opt.value)}
           className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
-            isActive(opt.value) ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+            isActive(opt.value) ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
           }`}>
           {opt.label}
         </button>
@@ -229,7 +229,7 @@ function NumberChips({ options, value, onChange }: {
       {options.map(n => (
         <button key={n} type="button" onClick={() => onChange(n)}
           className={`w-10 h-10 rounded-full text-[14px] font-medium border transition-all ${
-            value === n ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+            value === n ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
           }`}>
           {n}
         </button>
@@ -279,7 +279,7 @@ function ModeScreen({ onSelect }: { onSelect: (m: Mode) => void }) {
           },
         ]).map(opt => (
           <button key={opt.mode} type="button" onClick={() => onSelect(opt.mode)}
-            className="p-6 rounded-2xl border-2 border-gray-200 bg-white text-left hover:border-gray-900 hover:bg-gray-50 transition-all group">
+            className="p-6 rounded-2xl border-2 border-gray-200 bg-white text-left hover:border-indigo-600 hover:bg-indigo-50 transition-all group">
             <div className="text-3xl mb-4">{opt.emoji}</div>
             <div className="text-[17px] font-semibold text-gray-900 mb-2 group-hover:text-gray-900">
               {opt.label}
@@ -357,7 +357,7 @@ function Step2({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
             return (
               <button key={full} type="button" onClick={() => toggleMealPrepDay(full)}
                 className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
-                  active ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                  active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
                 }`}>
                 {short}
               </button>
@@ -428,7 +428,7 @@ function Step4({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
           ] as const).map(opt => (
             <button key={String(opt.val)} type="button" onClick={() => set("is_remote", opt.val)}
               className={`p-5 rounded-2xl border-2 text-left transition-all ${
-                data.is_remote === opt.val ? "border-gray-900 bg-gray-50" : "border-gray-200 bg-white hover:border-gray-300"
+                data.is_remote === opt.val ? "border-indigo-600 bg-indigo-50" : "border-gray-200 bg-white hover:border-gray-300"
               }`}>
               <div className={`text-[15px] font-semibold mb-1 ${data.is_remote === opt.val ? "text-gray-900" : "text-gray-700"}`}>{opt.label}</div>
               <div className="text-[13px] text-gray-500 leading-snug">{opt.desc}</div>
@@ -506,7 +506,7 @@ function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
             return (
               <button key={full} type="button" onClick={() => toggleDay(full)}
                 className={`px-3 py-1.5 rounded-full text-[13px] font-medium border transition-all ${
-                  active ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                  active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
                 }`}>
                 {short}
               </button>
@@ -515,7 +515,7 @@ function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
         </div>
       </div>
       <button type="button" onClick={handleAdd} disabled={!canAdd}
-        className="w-full py-3 rounded-xl text-[14px] font-semibold bg-gray-900 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-800 transition-colors">
+        className="w-full py-3 rounded-xl text-[14px] font-semibold bg-indigo-600 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors">
         Add commitment
       </button>
     </div>
@@ -537,7 +537,7 @@ function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
           <input type="range" min={5} max={60} step={5} value={data.weekly_task_capacity_hours}
             onChange={e => set("weekly_task_capacity_hours", Number(e.target.value))}
             className="wizard-range w-full h-2 rounded-full cursor-pointer"
-            style={{ background: `linear-gradient(to right, #111111 ${capacityPct}%, #e5e7eb ${capacityPct}%)` }} />
+            style={{ background: `linear-gradient(to right, #4f46e5 ${capacityPct}%, #e5e7eb ${capacityPct}%)` }} />
           <div className="flex justify-between mt-1.5">
             <span className="text-[12px] text-gray-400">Light week</span>
             <span className="text-[12px] text-gray-400">Full capacity</span>
@@ -553,7 +553,7 @@ function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
             ]).map(opt => (
               <button key={opt.val} type="button" onClick={() => set("energy_preference", opt.val)}
                 className={`p-5 rounded-2xl border-2 text-left transition-all ${
-                  data.energy_preference === opt.val ? "border-gray-900 bg-gray-50" : "border-gray-200 bg-white hover:border-gray-300"
+                  data.energy_preference === opt.val ? "border-indigo-600 bg-indigo-50" : "border-gray-200 bg-white hover:border-gray-300"
                 }`}>
                 <div className={`text-[15px] font-semibold mb-1 ${data.energy_preference === opt.val ? "text-gray-900" : "text-gray-700"}`}>{opt.label}</div>
                 <div className="text-[13px] text-gray-500 leading-snug">{opt.desc}</div>
@@ -655,7 +655,7 @@ function DraftTaskForm({ onAdd, onCancel }: {
           {PRIORITIES.map(p => (
             <button key={p} type="button" onClick={() => setPriority(p)}
               className={`px-3 py-1.5 rounded-full text-[13px] font-medium border capitalize transition-all ${
-                priority === p ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                priority === p ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
               }`}>
               {p}
             </button>
@@ -673,7 +673,7 @@ function DraftTaskForm({ onAdd, onCancel }: {
           ]).map(opt => (
             <button key={opt.id} type="button" onClick={() => setTimingMode(opt.id)}
               className={`p-3 rounded-xl border-2 text-left transition-all ${
-                timingMode === opt.id ? "border-gray-900 bg-white" : "border-gray-200 bg-white hover:border-gray-300"
+                timingMode === opt.id ? "border-indigo-600 bg-white" : "border-gray-200 bg-white hover:border-gray-300"
               }`}>
               <span className="text-lg">{opt.emoji}</span>
               <div className={`text-[13px] font-medium mt-1 ${timingMode === opt.id ? "text-gray-900" : "text-gray-600"}`}>
@@ -694,7 +694,7 @@ function DraftTaskForm({ onAdd, onCancel }: {
                   return (
                     <button key={full} type="button" onClick={() => togglePrefDay(full)}
                       className={`px-3 py-1.5 rounded-full text-[13px] font-medium border transition-all ${
-                        active ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                        active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
                       }`}>
                       {short}
                     </button>
@@ -709,7 +709,7 @@ function DraftTaskForm({ onAdd, onCancel }: {
                   <button key={tod} type="button"
                     onClick={() => setTimeOfDay(prev => prev === tod ? "" : tod)}
                     className={`px-4 py-2 rounded-full text-[14px] font-medium border capitalize transition-all ${
-                      timeOfDay === tod ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                      timeOfDay === tod ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
                     }`}>
                     {tod}
                   </button>
@@ -723,7 +723,7 @@ function DraftTaskForm({ onAdd, onCancel }: {
       {/* Actions */}
       <div className="flex gap-2 pt-1">
         <button type="button" onClick={handleAdd} disabled={!canAdd}
-          className="flex-1 py-3 rounded-xl text-[14px] font-semibold bg-gray-900 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-800 transition-colors">
+          className="flex-1 py-3 rounded-xl text-[14px] font-semibold bg-indigo-600 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors">
           Add task
         </button>
         <button type="button" onClick={onCancel}
@@ -829,6 +829,85 @@ function FreeTextStep({ data, set }: { data: WizardData; set: <K extends keyof W
   );
 }
 
+// ─── REVIEW STEP ─────────────────────────────────────────────────────────────
+
+function ReviewStep({ data, set, mode }: {
+  data: WizardData;
+  set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void;
+  mode: Mode;
+}) {
+  const sleepHoursPerWeek = data.sleep_target_hours * 7;
+  const routineMinsPerWeek = (data.morning_routine_mins + data.night_routine_mins + data.shower_mins) * 7;
+  const mealMinsPerWeek = data.meals_per_day * data.meal_duration_mins * 7;
+  const gymMinsPerWeek = data.gym_days_per_week * data.gym_duration_mins;
+  const muayThaiMinsPerWeek = data.muay_thai_days_per_week * data.muay_thai_duration_mins;
+  const commuteMinsPerWeek = data.is_remote ? 0 : data.work_days_per_week * data.commute_minutes * 2;
+  const fixedHours = sleepHoursPerWeek + (routineMinsPerWeek + mealMinsPerWeek + gymMinsPerWeek + muayThaiMinsPerWeek + commuteMinsPerWeek) / 60;
+  const freeHours = Math.max(0, Math.round((168 - fixedHours) * 10) / 10);
+
+  const summaryItems = [
+    { label: "Sleep", value: `${data.sleep_target_hours}h / night` },
+    { label: "Gym", value: `${data.gym_days_per_week}×/week` },
+    { label: "Muay Thai", value: `${data.muay_thai_days_per_week}×/week` },
+    { label: "Meals/day", value: String(data.meals_per_day) },
+    { label: "Commute", value: data.is_remote ? "Remote" : `${data.commute_minutes}m × ${data.work_days_per_week}d` },
+    { label: "Tasks added", value: String(data.tasks.length) },
+  ];
+
+  return (
+    <StepShell
+      headline="Your week, by the numbers."
+      subtext={`${mode === "ai" ? "Review your tasks" : "Review all your settings"} before Sunday builds your schedule.`}
+    >
+      {mode === "manual" && (
+        <div className="grid grid-cols-2 gap-3 mb-7">
+          {summaryItems.map(({ label, value }) => (
+            <div key={label} className="bg-zinc-50 rounded-xl border border-zinc-200 p-4">
+              <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-1">{label}</p>
+              <p className="text-[17px] font-semibold text-zinc-900">{value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5 mb-7">
+        <p className="text-[11px] font-bold text-indigo-500 uppercase tracking-widest mb-2">Estimated free time</p>
+        <p className="text-[36px] font-semibold text-zinc-900 leading-none">{freeHours}h</p>
+        <p className="text-[13px] text-zinc-500 mt-1.5">per week available for tasks and rest</p>
+      </div>
+
+      <div className="mb-7">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[13px] font-semibold text-zinc-400 uppercase tracking-widest">Task capacity</p>
+          <span className="text-[15px] font-semibold text-zinc-900 tabular-nums">{data.weekly_task_capacity_hours} hrs/week</span>
+        </div>
+        <input
+          type="range" min={5} max={60} step={5}
+          value={data.weekly_task_capacity_hours}
+          onChange={(e) => set("weekly_task_capacity_hours", Number(e.target.value))}
+          className="wizard-range w-full h-2 rounded-full cursor-pointer"
+          style={{ background: `linear-gradient(to right, #4f46e5 ${(data.weekly_task_capacity_hours / 60) * 100}%, #e4e4e7 ${(data.weekly_task_capacity_hours / 60) * 100}%)` }}
+        />
+        <div className="flex justify-between mt-1.5">
+          <span className="text-[12px] text-zinc-400">Light week</span>
+          <span className="text-[12px] text-zinc-400">Full capacity</span>
+        </div>
+      </div>
+
+      <div>
+        <p className="text-[13px] font-semibold text-zinc-400 uppercase tracking-widest mb-2">Anything else? <span className="normal-case font-normal text-zinc-400">(optional)</span></p>
+        <textarea
+          value={data.extra_context}
+          onChange={(e) => set("extra_context", e.target.value)}
+          placeholder="e.g. Low energy Wednesday, dentist Thursday 2pm, avoid screens after 9pm..."
+          rows={3}
+          className="w-full px-4 py-3 rounded-xl border border-zinc-200 text-[14px] text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-indigo-300 transition-colors resize-none bg-white leading-relaxed"
+        />
+      </div>
+    </StepShell>
+  );
+}
+
 // ─── DONE SCREEN ──────────────────────────────────────────────────────────────
 
 function DoneScreen() {
@@ -847,7 +926,7 @@ function DoneScreen() {
         Sunday generates your first schedule on Sunday.
       </p>
       <button type="button" onClick={() => router.push("/week")}
-        className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-gray-900 text-white text-[16px] font-semibold hover:bg-gray-800 transition-colors">
+        className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-indigo-600 text-white text-[16px] font-semibold hover:bg-indigo-700 transition-colors">
         View this week →
       </button>
     </div>
@@ -897,8 +976,8 @@ export default function SetupPage() {
   }
 
   // Step routing
-  const TOTAL        = mode === "ai" ? 2 : 7;
-  const tasksStepNum = mode === "ai" ? 1 : 6;
+  const TOTAL        = mode === "ai" ? 2 : 5;
+  const tasksStepNum = mode === "ai" ? 1 : 4;
   const isLastStep   = step === TOTAL;
   const canContinue  = step !== tasksStepNum || data.tasks.length > 0;
 
@@ -908,14 +987,12 @@ export default function SetupPage() {
       if (step === 1) return <Step1 {...props} />;
       if (step === 2) return <Step2 {...props} />;
       if (step === 3) return <Step3 {...props} />;
-      if (step === 4) return <Step4 {...props} />;
-      if (step === 5) return <Step5 {...props} />;
-      if (step === 6) return <TasksStep {...props} />;
-      if (step === 7) return <FreeTextStep {...props} />;
+      if (step === 4) return <TasksStep {...props} />;
+      if (step === 5) return <ReviewStep data={data} set={set} mode={mode} />;
     }
     if (mode === "ai") {
       if (step === 1) return <TasksStep {...props} />;
-      if (step === 2) return <FreeTextStep {...props} />;
+      if (step === 2) return <ReviewStep data={data} set={set} mode={mode} />;
     }
     return null;
   }
@@ -995,7 +1072,7 @@ export default function SetupPage() {
     >
       {/* Progress bar */}
       <div className="fixed top-0 left-0 right-0 h-[3px] bg-gray-100 z-[70]">
-        <div className="h-full bg-gray-900 transition-all duration-500 ease-out" style={{ width: `${progress}%` }} />
+        <div className="h-full bg-indigo-600 transition-all duration-500 ease-out" style={{ width: `${progress}%` }} />
       </div>
 
       {/* Step counter */}
@@ -1029,12 +1106,12 @@ export default function SetupPage() {
 
             {isLastStep ? (
               <button type="button" onClick={handleGenerate} disabled={generating}
-                className="flex-1 sm:flex-none sm:min-w-[200px] px-6 py-3 rounded-xl text-[15px] font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                className="flex-1 sm:flex-none sm:min-w-[200px] px-6 py-3 rounded-xl text-[15px] font-semibold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                 {generating ? LOADING_MESSAGES[loadingMsgIdx] : "Generate my week →"}
               </button>
             ) : (
               <button type="button" onClick={goNext} disabled={!canContinue}
-                className="flex-1 sm:flex-none sm:min-w-[160px] px-6 py-3 rounded-xl text-[15px] font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                className="flex-1 sm:flex-none sm:min-w-[160px] px-6 py-3 rounded-xl text-[15px] font-semibold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                 Continue →
               </button>
             )}
