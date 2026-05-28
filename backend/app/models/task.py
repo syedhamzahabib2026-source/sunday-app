@@ -28,5 +28,10 @@ class Task(Base):
     timing_preference = Column(String, nullable=True, default="ai_decide")
     preferred_days = Column(String, nullable=True)  # JSON-encoded list
 
+    # Set at creation, never changed by bumping
+    original_priority = Column(String, nullable=True)
+    # task title that displaced this task (cascade tracking)
+    bumped_from = Column(String, nullable=True)
+
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

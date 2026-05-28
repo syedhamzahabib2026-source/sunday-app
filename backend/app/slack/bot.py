@@ -48,9 +48,17 @@ Possible intents:
 Examples: "add a task", "I need to buy groceries", "remind me to call mom", "new task: write report"
 - my_tasks: user wants to SEE their existing task list. \
 Examples: "current tasks", "what tasks do I have", "show me tasks", "list tasks", "my tasks", "show tasks"
-- my_schedule: user wants to SEE today's schedule or calendar. \
+- my_schedule: user wants to SEE TODAY's schedule or calendar. \
 Examples: "show me the schedule", "what's on my schedule today", "today's schedule", \
 "show schedule", "what's on my schedule", "my schedule"
+- day_query: user wants to see a SPECIFIC DAY's schedule (not today). \
+Extract: day (e.g. "Wednesday", "Thursday", "tomorrow", "Friday"). \
+Examples: "what does my Wednesday look like", "show me Thursday", "what's on Friday", \
+"how does Tuesday look", "what's happening Saturday"
+- add_event: user is adding a FIXED event to their calendar (shift, appointment, dentist, travel, etc). \
+Extract: title, day, start_time (24h HH:MM), end_time (24h HH:MM, compute from duration if needed), duration_minutes. \
+Examples: "I picked up a shift Wednesday 2pm to 10pm", "dentist Thursday at 3, 1 hour", \
+"block off Friday afternoon for travel", "I have a meeting Monday 10am to 11:30am"
 - complete_task: user wants to mark a task complete
 - cancel_task: user wants to cancel a task
 - missed_task: user wants to mark a task as missed
@@ -62,10 +70,14 @@ Examples: "show me the schedule", "what's on my schedule today", "today's schedu
 
 IMPORTANT: "show me the schedule", "what's on my schedule", "today's schedule" → my_schedule (NOT add_task).
 IMPORTANT: "current tasks", "list tasks", "show tasks" → my_tasks (NOT add_task).
+IMPORTANT: "what does Wednesday look like", "show Thursday" → day_query (NOT my_schedule).
+IMPORTANT: "I picked up a shift", "dentist appointment", "block off time" → add_event (NOT add_task).
 
 Priority values: critical, high, medium, low, optional
 If duration is given in hours convert to minutes.
 If no priority stated, use "medium".
+For add_event: convert times like "2pm" → "14:00", "3pm" → "15:00", "10am" → "10:00".
+For add_event: if only start_time and duration given, compute end_time = start_time + duration.
 
 Respond ONLY with raw JSON starting with { — no markdown, no code fences, no extra text:
 {"intent":"add_task","data":{"title":"Work meeting","duration_minutes":60,"priority":"critical","deadline":null},"confidence":"high","missing_fields":["duration_minutes"]}"""
@@ -672,6 +684,10 @@ def _continue_flow(user_id: str, text: str, say):
         _continue_add_task(user_id, text, say)
     elif flow in ("complete", "cancel", "missed"):
         _continue_pick_flow(user_id, text, say)
+    elif flow == "add_event":
+        _continue_add_event(user_id, text, say)
+    elif flow == "confirm_reorg":
+        _continue_confirm_reorg(user_id, text, say)
 
 
 # ── Intent router ─────────────────────────────────────────────────────────────
@@ -752,10 +768,236 @@ def _route_by_intent(intent: str, data: dict, user_id: str, say, event: dict):
         _handle_reschedule(say)
     elif intent == "generate_schedule":
         _handle_generate_schedule(say)
+    elif intent == "add_event":
+        _handle_add_event(user_id, data, say)
+    elif intent == "day_query":
+        _handle_day_query(data, say)
     elif intent == "help":
         say(HELP_TEXT)
     elif event.get("channel_type") == "im":
         say("I didn't catch that. Type *help* to see what I can do.")
+
+
+# ── Day query handler ─────────────────────────────────────────────────────────
+
+def _handle_day_query(data: dict, say):
+    day_str = (data.get("day") or "today").strip()
+    target = _parse_relative_day(day_str)
+    if not target:
+        say(f"I couldn't understand *{day_str}*. Try 'Wednesday', 'tomorrow', or 'Friday'.")
+        return
+    blocks = _api_get(f"/schedule/{USER_ID}/day/{target}")
+    if not blocks:
+        say(f"Nothing scheduled for *{_fmt_date(target)}*.")
+        return
+    BLOCK_EMOJI = {
+        "sleep": ":zzz:", "routine": ":sparkles:", "meal": ":fork_and_knife:",
+        "commute": ":bus:", "gym": ":muscle:", "muay_thai": ":martial_arts_uniform:",
+        "task": ":white_check_mark:", "buffer": ":hourglass:", "event": ":calendar:",
+    }
+    lines = [f"*Schedule for {_fmt_date(target)}:*"]
+    for b in blocks:
+        emoji = BLOCK_EMOJI.get(b.get("block_type", ""), ":calendar:")
+        lock = " :lock:" if b.get("is_locked") else ""
+        lines.append(f"{emoji} *{b['start_time']} – {b['end_time']}* {b['title']}{lock}")
+    say("\n".join(lines))
+
+
+# ── Event add handler ─────────────────────────────────────────────────────────
+
+def _parse_time_str(raw: Optional[str]) -> Optional[str]:
+    """Ensure time is HH:MM 24h format. Returns None if unparseable."""
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    if re.match(r"^\d{1,2}:\d{2}$", raw):
+        h, m = raw.split(":")
+        return f"{int(h):02d}:{int(m):02d}"
+    return None
+
+
+def _add_minutes_to_time(time_str: str, minutes: int) -> str:
+    h, m = map(int, time_str.split(":"))
+    total = h * 60 + m + minutes
+    return f"{(total // 60) % 24:02d}:{total % 60:02d}"
+
+
+def _handle_add_event(user_id: str, data: dict, say):
+    title = (data.get("title") or "Event").strip()
+    day_str = (data.get("day") or "today").strip()
+    start_time = _parse_time_str(data.get("start_time"))
+    end_time = _parse_time_str(data.get("end_time"))
+    duration = data.get("duration_minutes")
+
+    target_date = _parse_relative_day(day_str)
+    if not target_date:
+        say(f"I couldn't understand the day *{day_str}*. Try 'Wednesday' or 'tomorrow'.")
+        return
+
+    if not start_time:
+        say(f"What time does *{title}* start? *(e.g. 2pm or 14:00)*")
+        conversation_state[user_id] = {
+            "flow": "add_event",
+            "step": "ask_start_time",
+            "data": {"title": title, "day_str": day_str, "target_date": str(target_date)},
+        }
+        return
+
+    if not end_time:
+        if duration:
+            end_time = _add_minutes_to_time(start_time, int(duration))
+        else:
+            say(f"How long is *{title}*? *(e.g. 2 hours or 90 minutes)*")
+            conversation_state[user_id] = {
+                "flow": "add_event",
+                "step": "ask_duration",
+                "data": {
+                    "title": title, "day_str": day_str,
+                    "target_date": str(target_date), "start_time": start_time,
+                },
+            }
+            return
+
+    _execute_event_plan(user_id, title, target_date, start_time, end_time, say)
+
+
+def _execute_event_plan(user_id: str, title: str, target_date, start_time: str, end_time: str, say):
+    """Call dry_run, then either apply immediately or send warning for confirmation."""
+    day_label = _fmt_date(target_date)
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/schedules/event",
+            json={
+                "user_id": USER_ID,
+                "date": str(target_date),
+                "title": title,
+                "start_time": start_time,
+                "end_time": end_time,
+                "dry_run": True,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        plan = resp.json()
+    except Exception as exc:
+        say(f"Something went wrong checking the schedule. ({exc})")
+        return
+
+    if not plan.get("has_warnings"):
+        # Apply immediately — no warnings
+        try:
+            apply_resp = requests.post(
+                f"{BASE_URL}/schedules/event",
+                json={
+                    "user_id": USER_ID,
+                    "date": str(target_date),
+                    "title": title,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "dry_run": False,
+                },
+                timeout=15,
+            )
+            apply_resp.raise_for_status()
+            result = apply_resp.json()
+            summary = result.get("summary", "Schedule updated.")
+            say(
+                f":calendar: *{title}* added for *{day_label}* {start_time}–{end_time}.\n{summary}"
+            )
+        except Exception as exc:
+            say(f"Failed to add event. ({exc})")
+        return
+
+    # Has warnings — store in state and ask for confirmation
+    conversation_state[user_id] = {
+        "flow": "confirm_reorg",
+        "step": "waiting_confirm",
+        "data": {
+            "event": {
+                "user_id": USER_ID,
+                "date": str(target_date),
+                "title": title,
+                "start_time": start_time,
+                "end_time": end_time,
+                "dry_run": False,
+            },
+            "day_label": day_label,
+        },
+    }
+    say(plan["warning_message"])
+
+
+def _continue_add_event(user_id: str, text: str, say):
+    state = conversation_state[user_id]
+    step = state["step"]
+    data = state["data"]
+
+    if step == "ask_start_time":
+        # Try to extract a time from the reply
+        resolved = None
+        clean = text.strip()
+        # Try Claude's time parsing via deadline parser, or simple regex
+        match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", clean, re.IGNORECASE)
+        if match:
+            h = int(match.group(1))
+            m = int(match.group(2) or 0)
+            ampm = (match.group(3) or "").lower()
+            if ampm == "pm" and h < 12:
+                h += 12
+            elif ampm == "am" and h == 12:
+                h = 0
+            resolved = f"{h:02d}:{m:02d}"
+        if not resolved:
+            say("I didn't catch that time. Try *2pm* or *14:00*.")
+            return
+        del conversation_state[user_id]
+        _handle_add_event(user_id, {
+            "title": data["title"],
+            "day": data["day_str"],
+            "start_time": resolved,
+        }, say)
+
+    elif step == "ask_duration":
+        minutes = _extract_duration_minutes(text)
+        if not minutes:
+            say("How many minutes? (e.g. *60* or *2 hours*)")
+            return
+        end_time = _add_minutes_to_time(data["start_time"], minutes)
+        del conversation_state[user_id]
+        _execute_event_plan(
+            user_id, data["title"],
+            date.fromisoformat(data["target_date"]),
+            data["start_time"], end_time, say,
+        )
+
+
+def _continue_confirm_reorg(user_id: str, text: str, say):
+    lower = text.lower().strip()
+    state = conversation_state[user_id]
+    event_data = state["data"]["event"]
+    day_label = state["data"]["day_label"]
+
+    _YES = frozenset(("yes", "y", "yep", "yeah", "sure", "ok", "okay", "confirm", "go ahead", "do it"))
+    _NO  = frozenset(("no", "n", "nope", "nah", "cancel", "stop", "abort"))
+
+    if lower in _YES:
+        del conversation_state[user_id]
+        try:
+            resp = requests.post(f"{BASE_URL}/schedules/event", json=event_data, timeout=15)
+            resp.raise_for_status()
+            result = resp.json()
+            say(
+                f":white_check_mark: Done. *{event_data['title']}* added for *{day_label}*"
+                f" {event_data['start_time']}–{event_data['end_time']}.\n"
+                f"{result.get('summary', 'Schedule updated.')}"
+            )
+        except Exception as exc:
+            say(f"Failed to apply changes. ({exc})")
+    elif lower in _NO:
+        del conversation_state[user_id]
+        say("Cancelled. No changes were made.")
+    else:
+        say("Please reply *yes* to confirm or *no* to cancel.")
 
 
 # ── Keyword fallback (used when Claude API is unavailable) ────────────────────

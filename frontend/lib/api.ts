@@ -164,3 +164,25 @@ export function createTask(data: TaskCreatePayload): Promise<Task> {
     body: JSON.stringify(data),
   });
 }
+
+export interface ScheduleRecord {
+  id: number;
+  user_id: number;
+  week_start_date: string;   // "YYYY-MM-DD"
+  status: string;            // "pending" | "active" | "archived"
+  week_label: string | null;
+  archived_at: string | null;
+  created_at: string;
+}
+
+export function getArchivedSchedules(userId: number): Promise<ScheduleRecord[]> {
+  return apiFetch(`/schedules/${userId}/archived`);
+}
+
+export function getArchivedWeekBlocks(userId: number, weekStart: string): Promise<ScheduleBlock[]> {
+  return apiFetch(`/schedules/week/${userId}/${weekStart}`);
+}
+
+export function deleteArchivedSchedule(scheduleId: number): Promise<void> {
+  return apiFetch(`/schedules/${scheduleId}`, { method: "DELETE" });
+}

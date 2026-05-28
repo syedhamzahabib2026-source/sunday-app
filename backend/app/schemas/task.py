@@ -37,6 +37,8 @@ class TaskResponse(BaseModel):
     status: str
     timing_preference: Optional[str]
     preferred_days: Optional[str]
+    original_priority: Optional[str]
+    bumped_from: Optional[str]
     created_at: datetime
     updated_at: datetime
 

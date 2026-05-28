@@ -19,5 +19,5 @@ Base = declarative_base()
 
 def init_db():
     # Import models so Base picks them up before create_all
-    from app.models import user, weekly_preferences, task, schedule_block, completion, reorganization_log  # noqa: F401
+    from app.models import user, weekly_preferences, task, schedule_block, completion, reorganization_log, schedule  # noqa: F401
     Base.metadata.create_all(bind=engine)
