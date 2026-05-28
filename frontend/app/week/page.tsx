@@ -91,8 +91,18 @@ export default function WeekPage() {
   const taskBlocks = blocks.filter(b => b.block_type === "task");
   const totalHours = Math.round(blocks.reduce((s, b) => s + blockMins(b), 0) / 60 * 10) / 10;
 
+  // Week progress bar (only for current week)
+  const isCurrentWeek = toLocalDateString(weekStart) === toLocalDateString(getMonday(new Date()));
+  const weekProgressPct = (() => {
+    const now = new Date();
+    const dayOfWeek = now.getDay(); // 0=Sun
+    const daysFromMon = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const partial = now.getHours() / 24;
+    return Math.min(100, Math.round(((daysFromMon + partial) / 7) * 100));
+  })();
+
   return (
-    <div className="px-4 sm:px-6 pt-7 pb-16 max-w-7xl mx-auto">
+    <div className="px-4 sm:px-6 pt-7 pb-16 max-w-7xl mx-auto page-fade">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
         <div>
@@ -118,6 +128,22 @@ export default function WeekPage() {
           ))}
         </div>
       </div>
+
+      {/* Week progress bar */}
+      {isCurrentWeek && (
+        <div className="mb-5">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-widest">Week progress</span>
+            <span className="text-[11px] font-bold text-indigo-600">{weekProgressPct}%</span>
+          </div>
+          <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-indigo-500 rounded-full transition-all duration-700"
+              style={{ width: `${weekProgressPct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Summary strip */}
       {!loading && !error && blocks.length > 0 && (

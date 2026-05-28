@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AlertTriangle } from "lucide-react";
 
 const TIMEZONES = [
   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
@@ -21,6 +22,15 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
+function SectionHeader({ title }: { title: string }) {
+  return (
+    <div className="flex items-center gap-3 mb-4">
+      <h2 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest whitespace-nowrap">{title}</h2>
+      <div className="flex-1 h-px bg-zinc-100" />
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const [name, setName] = useState("Test User");
   const [timezone, setTimezone] = useState("America/Chicago");
@@ -35,35 +45,42 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-8 pb-20">
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-8 pb-20 page-fade">
       <div className="mb-8">
         <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">Settings</p>
         <h1 className="text-[28px] sm:text-[32px] font-semibold text-zinc-900">Preferences</h1>
       </div>
 
-      <div className="space-y-5">
-        {/* Profile */}
-        <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm">
-          <h2 className="text-[14px] font-semibold text-zinc-900 mb-4">Profile</h2>
-          <div className="space-y-4">
+      <div className="space-y-8">
+        {/* Account */}
+        <div>
+          <SectionHeader title="Account" />
+          <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-5">
             <div>
               <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest block mb-2">Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                className="w-full border border-zinc-200 rounded-lg px-3 py-2 text-[14px] text-zinc-900 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
+                className="w-full border border-zinc-200 rounded-lg px-3 py-2 text-[14px] text-zinc-900 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all hover:border-zinc-300"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Preferences */}
+        <div>
+          <SectionHeader title="Preferences" />
+          <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-5">
             <div>
               <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest block mb-2">Timezone</label>
               <select
                 value={timezone}
                 onChange={e => setTimezone(e.target.value)}
-                className="w-full border border-zinc-200 rounded-lg px-3 py-2 text-[14px] text-zinc-900 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all bg-white"
+                className="w-full border border-zinc-200 rounded-lg px-3 py-2 text-[14px] text-zinc-900 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all bg-white hover:border-zinc-300"
               >
                 {TIMEZONES.map(tz => (
-                  <option key={tz} value={tz}>{tz.replace("_", " ")}</option>
+                  <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
                 ))}
               </select>
             </div>
@@ -90,15 +107,20 @@ export default function SettingsPage() {
         </div>
 
         {/* Notifications */}
-        <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm">
-          <h2 className="text-[14px] font-semibold text-zinc-900 mb-4">Notifications</h2>
-          <div className="space-y-0 divide-y divide-zinc-100">
+        <div>
+          <SectionHeader title="Notifications" />
+          <div className="bg-white border border-zinc-200 rounded-xl shadow-sm overflow-hidden">
             {[
               { key: "slackReminders" as const, label: "Slack reminders", desc: "Daily nudge for upcoming tasks" },
               { key: "weeklySummary" as const, label: "Weekly summary", desc: "Sunday evening recap of your week" },
               { key: "overloadWarnings" as const, label: "Overload warnings", desc: "Alert when schedule is over capacity" },
-            ].map(({ key, label, desc }) => (
-              <div key={key} className="flex items-center justify-between py-4">
+            ].map(({ key, label, desc }, i, arr) => (
+              <div
+                key={key}
+                className={`flex items-center justify-between px-6 py-4 hover:bg-zinc-50 transition-colors cursor-default ${
+                  i < arr.length - 1 ? "border-b border-zinc-100" : ""
+                }`}
+              >
                 <div>
                   <p className="text-[14px] font-medium text-zinc-900">{label}</p>
                   <p className="text-[12px] text-zinc-400">{desc}</p>
@@ -112,31 +134,52 @@ export default function SettingsPage() {
         {/* Save */}
         <button
           onClick={handleSave}
-          className="w-full bg-indigo-600 text-white text-[14px] font-semibold py-3 rounded-xl hover:bg-indigo-700 transition-colors"
+          disabled={saved}
+          className="w-full bg-indigo-600 text-white text-[14px] font-semibold py-3 rounded-xl hover:bg-indigo-700 disabled:opacity-70 transition-colors shadow-sm"
         >
-          {saved ? "✓ Saved" : "Save changes"}
+          {saved ? "✓ Changes saved" : "Save changes"}
         </button>
 
         {/* Danger zone */}
-        <div className="bg-white border border-red-100 rounded-xl p-6">
-          <h2 className="text-[14px] font-semibold text-red-700 mb-2">Danger zone</h2>
-          <p className="text-[13px] text-zinc-500 mb-4">This will permanently delete all your schedules, tasks, and preferences. This cannot be undone.</p>
-          {!resetConfirm ? (
-            <button
-              onClick={() => setResetConfirm(true)}
-              className="px-4 py-2 bg-white border border-red-200 text-red-600 text-[13px] font-semibold rounded-lg hover:bg-red-50 transition-colors"
-            >
-              Reset all data
-            </button>
-          ) : (
-            <div className="flex items-center gap-3">
-              <span className="text-[13px] text-red-600 font-medium">Are you sure? This is permanent.</span>
-              <button disabled className="px-4 py-2 bg-red-600 text-white text-[13px] font-semibold rounded-lg opacity-50 cursor-not-allowed">
-                Confirm reset
-              </button>
-              <button onClick={() => setResetConfirm(false)} className="text-[13px] text-zinc-500 hover:text-zinc-700">Cancel</button>
+        <div>
+          <SectionHeader title="Danger Zone" />
+          <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center shrink-0 mt-0.5">
+                <AlertTriangle className="w-4 h-4 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-[14px] font-semibold text-red-800 mb-1">Reset all data</h3>
+                <p className="text-[13px] text-red-600 leading-relaxed">
+                  This will permanently delete all your schedules, tasks, and preferences. This action cannot be undone.
+                </p>
+              </div>
             </div>
-          )}
+            {!resetConfirm ? (
+              <button
+                onClick={() => setResetConfirm(true)}
+                className="px-4 py-2 bg-white border border-red-300 text-red-700 text-[13px] font-semibold rounded-lg hover:bg-red-100 transition-colors"
+              >
+                Reset all data
+              </button>
+            ) : (
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-[13px] text-red-700 font-medium">Are you sure? This is permanent.</span>
+                <button
+                  disabled
+                  className="px-4 py-2 bg-red-600 text-white text-[13px] font-semibold rounded-lg opacity-50 cursor-not-allowed"
+                >
+                  Confirm reset
+                </button>
+                <button
+                  onClick={() => setResetConfirm(false)}
+                  className="text-[13px] text-zinc-500 hover:text-zinc-700 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -52,17 +52,16 @@ function durationMins(b: ScheduleBlock): number {
 }
 
 function fmtDuration(mins: number): string {
-  if (mins < 60) return `${mins}m`;
+  if (mins < 60) return `${mins} min`;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-function fmt12(t: string): string {
+function fmtShort(t: string): string {
   const [h, m] = t.split(":").map(Number);
-  const period = h >= 12 ? "PM" : "AM";
   const hour = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  return `${hour}:${String(m).padStart(2, "0")} ${period}`;
+  return `${hour}${m === 0 ? "" : `:${String(m).padStart(2, "0")}`}`;
 }
 
 interface Props {
@@ -92,58 +91,60 @@ export default function BlockCard({ block, onComplete, onMiss, onSkip, completed
 
   return (
     <div
-      className={`flex items-start gap-3 bg-white rounded-xl border border-zinc-200 border-l-[3px] px-4 py-3 transition-all ${
-        completed ? "opacity-50" : "hover:shadow-sm"
+      className={`flex items-center gap-3 bg-white rounded-xl border border-zinc-200 border-l-4 px-4 py-3 transition-all ${
+        completed ? "opacity-60" : "hover:shadow-sm hover:border-zinc-300"
       }`}
       style={{ borderLeftColor: getAccent(block) }}
     >
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap mb-0.5">
+        <div className="flex items-center gap-2 flex-wrap mb-1">
           <span className={`text-[14px] font-medium text-zinc-900 truncate ${completed ? "line-through text-zinc-400" : ""}`}>
             {block.title}
           </span>
           {isTask && <PriorityBadge priority={block.priority} />}
           {completed && (
             <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-green-50 text-green-700 border border-green-200">
-              Done
+              ✓ Done
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 text-[12px] text-zinc-400">
-          <span>{fmt12(block.start_time)} – {fmt12(block.end_time)}</span>
-          <span>·</span>
-          <span>{fmtDuration(mins)}</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Time pill */}
+          <span className="bg-zinc-100 text-zinc-500 rounded-full px-2 py-0.5 text-[11px] font-mono tabular-nums">
+            {fmtShort(block.start_time)}–{fmtShort(block.end_time)}
+          </span>
+          <span className="text-[12px] text-zinc-400">{fmtDuration(mins)}</span>
           {!isTask && (
-            <>
-              <span>·</span>
-              <span className="capitalize">{BLOCK_LABELS[block.block_type] ?? block.block_type}</span>
-            </>
+            <span className="text-[11px] text-zinc-400 capitalize">{BLOCK_LABELS[block.block_type] ?? block.block_type}</span>
           )}
         </div>
       </div>
 
       {isTask && !completed && (
-        <div className="flex items-center gap-1 shrink-0 mt-0.5">
+        <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={() => handle("complete")}
             disabled={loading !== null}
-            className="h-7 px-2.5 rounded-md text-[11px] font-semibold text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-40 transition-colors border border-green-200"
+            title="Mark complete"
+            className="w-7 h-7 rounded-lg text-[13px] font-semibold text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-40 transition-colors border border-green-200 flex items-center justify-center"
           >
-            {loading === "complete" ? "…" : "✓"}
+            {loading === "complete" ? "·" : "✓"}
           </button>
           <button
             onClick={() => handle("skip")}
             disabled={loading !== null}
-            className="h-7 px-2.5 rounded-md text-[11px] font-semibold text-zinc-500 bg-zinc-50 hover:bg-zinc-100 disabled:opacity-40 transition-colors border border-zinc-200"
+            title="Skip for today"
+            className="w-7 h-7 rounded-lg text-[13px] font-semibold text-zinc-500 bg-zinc-50 hover:bg-zinc-100 disabled:opacity-40 transition-colors border border-zinc-200 flex items-center justify-center"
           >
-            {loading === "skip" ? "…" : "⟳"}
+            {loading === "skip" ? "·" : "⟳"}
           </button>
           <button
             onClick={() => handle("miss")}
             disabled={loading !== null}
-            className="h-7 px-2.5 rounded-md text-[11px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-40 transition-colors border border-red-200"
+            title="Mark as missed"
+            className="w-7 h-7 rounded-lg text-[13px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-40 transition-colors border border-red-200 flex items-center justify-center"
           >
-            {loading === "miss" ? "…" : "✗"}
+            {loading === "miss" ? "·" : "✗"}
           </button>
         </div>
       )}
