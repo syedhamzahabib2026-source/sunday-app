@@ -2,22 +2,22 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from app.routers import users, weekly_preferences, tasks, schedule_blocks, completions, schedules
 
 app = FastAPI(title="Sunday API", version="1.0.0")
 
-_ALWAYS_ALLOWED = [
+_allowed_origins = [
     "https://sunday-app.pages.dev",
+    "https://sunday-app.pages.dev/",
     "http://localhost:3000",
-    "http://localhost:3001",
+    "http://127.0.0.1:3000",
 ]
-_raw_origins = os.getenv("ALLOWED_ORIGINS", "")
-_env_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-_allowed_origins = list(dict.fromkeys(_ALWAYS_ALLOWED + _env_origins))  # deduplicated, order preserved
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -41,3 +41,15 @@ def on_startup():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(rest_of_path: str):
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, GET, OPTIONS, PATCH, DELETE",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )

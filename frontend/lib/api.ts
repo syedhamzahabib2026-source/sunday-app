@@ -137,6 +137,9 @@ export function savePreferences(
   });
 }
 
+// Full URL: https://sunday-app-production-d774.up.railway.app/api/v1/schedule/generate
+// Route lives in backend/app/routers/schedule_blocks.py — POST /schedule/generate
+// (user_id is in the request body, not the path)
 export function generateSchedule(
   userId: number,
   weekStart: string,
