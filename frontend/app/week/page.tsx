@@ -35,7 +35,9 @@ function formatWeekRange(monday: Date): string {
 function blockMins(b: ScheduleBlock): number {
   const [sh, sm] = b.start_time.split(":").map(Number);
   const [eh, em] = b.end_time.split(":").map(Number);
-  return eh * 60 + em - (sh * 60 + sm);
+  // "00:00" end_time means midnight (end of day) = 1440 min, not 0
+  const endMins = eh === 0 && em === 0 ? 1440 : eh * 60 + em;
+  return endMins - (sh * 60 + sm);
 }
 
 export default function WeekPage() {
