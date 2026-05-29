@@ -23,44 +23,59 @@ def get_db():
 
 @router.post("/", response_model=WeeklyPreferencesResponse, status_code=201)
 def create_preferences(payload: WeeklyPreferencesCreate, db: Session = Depends(get_db)):
-    data = payload.model_dump()
-    data["meal_prep_days"] = json.dumps(data["meal_prep_days"])
-    data["fixed_commitments"] = json.dumps(data["fixed_commitments"])
-    prefs = WeeklyPreferences(**data)
-    db.add(prefs)
-    db.commit()
-    db.refresh(prefs)
-    return prefs
+    try:
+        data = payload.model_dump()
+        data["meal_prep_days"] = json.dumps(data["meal_prep_days"])
+        data["fixed_commitments"] = json.dumps(data["fixed_commitments"])
+        prefs = WeeklyPreferences(**data)
+        db.add(prefs)
+        db.commit()
+        db.refresh(prefs)
+        return prefs
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save preferences: {e}")
 
 
 @router.get("/{user_id}/current", response_model=WeeklyPreferencesResponse)
 def get_current_preferences(user_id: int, db: Session = Depends(get_db)):
-    prefs = (
-        db.query(WeeklyPreferences)
-        .filter(WeeklyPreferences.user_id == user_id)
-        .order_by(WeeklyPreferences.week_start_date.desc())
-        .first()
-    )
-    if not prefs:
-        raise HTTPException(status_code=404, detail="No preferences found for user")
-    return prefs
+    try:
+        prefs = (
+            db.query(WeeklyPreferences)
+            .filter(WeeklyPreferences.user_id == user_id)
+            .order_by(WeeklyPreferences.week_start_date.desc())
+            .first()
+        )
+        if not prefs:
+            raise HTTPException(status_code=404, detail="No preferences found for user")
+        return prefs
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch preferences: {e}")
 
 
 @router.put("/{pref_id}", response_model=WeeklyPreferencesResponse)
 def update_preferences(pref_id: int, payload: WeeklyPreferencesUpdate, db: Session = Depends(get_db)):
-    prefs = db.query(WeeklyPreferences).filter(WeeklyPreferences.id == pref_id).first()
-    if not prefs:
-        raise HTTPException(status_code=404, detail="Preferences not found")
+    try:
+        prefs = db.query(WeeklyPreferences).filter(WeeklyPreferences.id == pref_id).first()
+        if not prefs:
+            raise HTTPException(status_code=404, detail="Preferences not found")
 
-    updates = payload.model_dump(exclude_none=True)
-    if "meal_prep_days" in updates:
-        updates["meal_prep_days"] = json.dumps(updates["meal_prep_days"])
-    if "fixed_commitments" in updates:
-        updates["fixed_commitments"] = json.dumps(updates["fixed_commitments"])
+        updates = payload.model_dump(exclude_none=True)
+        if "meal_prep_days" in updates:
+            updates["meal_prep_days"] = json.dumps(updates["meal_prep_days"])
+        if "fixed_commitments" in updates:
+            updates["fixed_commitments"] = json.dumps(updates["fixed_commitments"])
 
-    for field, value in updates.items():
-        setattr(prefs, field, value)
+        for field, value in updates.items():
+            setattr(prefs, field, value)
 
-    db.commit()
-    db.refresh(prefs)
-    return prefs
+        db.commit()
+        db.refresh(prefs)
+        return prefs
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update preferences: {e}")
