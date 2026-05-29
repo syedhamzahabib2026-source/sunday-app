@@ -48,14 +48,17 @@ function PriorityBadge({ priority }: { priority: string | null }) {
 function durationMins(b: ScheduleBlock): number {
   const [sh, sm] = b.start_time.split(":").map(Number);
   const [eh, em] = b.end_time.split(":").map(Number);
-  return eh * 60 + em - (sh * 60 + sm);
+  // "00:00" end_time = midnight end-of-day (1440 min), not zero
+  const endMins = eh === 0 && em === 0 ? 1440 : eh * 60 + em;
+  return endMins - (sh * 60 + sm);
 }
 
 function fmtDuration(mins: number): string {
-  if (mins < 60) return `${mins} min`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  const m = Math.max(0, mins);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
 }
 
 function fmtShort(t: string): string {
