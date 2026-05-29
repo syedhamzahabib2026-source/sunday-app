@@ -49,6 +49,9 @@ class WeeklyPreferences(Base):
     mode = Column(String, nullable=False, default="manual")
     extra_context = Column(Text, nullable=True)
 
+    # Scheduling preferences in plain language — fed to the AI scheduling prompt
+    scheduling_notes = Column(Text, nullable=True)
+
     # Commitments
     fixed_commitments = Column(Text, nullable=True)  # JSON-encoded list
     notes = Column(Text, nullable=True)

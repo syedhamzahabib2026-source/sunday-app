@@ -32,6 +32,7 @@ class WeeklyPreferencesCreate(BaseModel):
     notes: Optional[str] = None
     mode: str = "manual"
     extra_context: Optional[str] = None
+    scheduling_notes: Optional[str] = None   # plain-language scheduling preferences for the AI
 
 
 class WeeklyPreferencesUpdate(BaseModel):
@@ -60,6 +61,7 @@ class WeeklyPreferencesUpdate(BaseModel):
     notes: Optional[str] = None
     mode: Optional[str] = None
     extra_context: Optional[str] = None
+    scheduling_notes: Optional[str] = None
 
 
 class WeeklyPreferencesResponse(BaseModel):
@@ -91,6 +93,7 @@ class WeeklyPreferencesResponse(BaseModel):
     notes: Optional[str]
     mode: str
     extra_context: Optional[str]
+    scheduling_notes: Optional[str]
     created_at: datetime
 
     @field_validator("meal_prep_days", "fixed_commitments", mode="before")

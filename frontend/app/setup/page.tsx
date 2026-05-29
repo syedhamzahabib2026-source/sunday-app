@@ -1218,14 +1218,20 @@ function ReviewStep({ data, set, mode }: {
       </div>
 
       <div>
-        <p className="text-[13px] font-semibold text-zinc-400 uppercase tracking-widest mb-2">Anything else? <span className="normal-case font-normal text-zinc-400">(optional)</span></p>
+        <p className="text-[13px] font-semibold text-zinc-400 uppercase tracking-widest mb-2">
+          Scheduling preferences <span className="normal-case font-normal text-zinc-400">(optional)</span>
+        </p>
         <textarea
           value={data.extra_context}
           onChange={(e) => set("extra_context", e.target.value)}
-          placeholder="e.g. Low energy Wednesday, dentist Thursday 2pm, avoid screens after 9pm..."
+          placeholder={"e.g. 'Prioritize deep work in the mornings' or 'I need buffer time between tasks' or 'Keep Friday afternoons free if possible'"}
           rows={3}
           className="w-full px-4 py-3 rounded-xl border border-zinc-200 text-[14px] text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-indigo-300 transition-colors resize-none bg-white leading-relaxed"
         />
+        <p className="text-[12px] text-indigo-500 mt-2 flex items-center gap-1.5">
+          <span>✦</span>
+          <span>Sunday&apos;s AI reads this when building your schedule.</span>
+        </p>
       </div>
     </StepShell>
   );
@@ -1468,6 +1474,7 @@ export default function SetupPage() {
         notes: null,
         mode: mode ?? "manual",
         extra_context: data.extra_context || null,
+        scheduling_notes: data.extra_context || null,
       });
 
       for (const task of data.tasks) {

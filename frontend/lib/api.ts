@@ -69,6 +69,7 @@ export interface WeeklyPreferences {
   notes: string | null;
   mode: string;
   extra_context: string | null;
+  scheduling_notes: string | null;
   created_at: string;
 }
 

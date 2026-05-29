@@ -4,6 +4,7 @@ Generates a full 7-day ScheduleBlock list for a user, working from a
 30-minute slot grid and inserting blocks in strict priority order.
 """
 import json
+import os
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -102,6 +103,81 @@ def _block(
     )
 
 
+# ── AI scheduling hints ───────────────────────────────────────────────────────
+
+def _get_ai_scheduling_hints(
+    scheduling_notes: str,
+    tasks: List[Task],
+    wake_time: str = "07:30",
+    bed_time: str = "23:30",
+) -> Dict[str, str]:
+    """
+    Call Claude with the user's scheduling_notes and task list.
+    Returns a dict mapping task title → preferred time slot:
+      "morning" | "afternoon" | "evening" | "any"
+    Gracefully returns {} on any failure (API key missing, network error, parse error).
+    """
+    if not scheduling_notes or not scheduling_notes.strip():
+        return {}
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("[scheduler] ANTHROPIC_API_KEY not set — skipping AI scheduling hints")
+        return {}
+
+    task_lines = "\n".join(
+        f"- {t.title} ({t.priority} priority, {t.duration_minutes} min)"
+        for t in tasks[:25]  # cap to avoid huge prompts on large task lists
+    )
+
+    prompt = f"""You are a scheduling assistant helping build a weekly schedule.
+
+User constraints: Wake {wake_time}, Bed {bed_time}.
+
+User scheduling preferences (follow these closely):
+{scheduling_notes}
+
+Apply these preferences when deciding task order, time-of-day placement, and free time distribution.
+
+Tasks to schedule:
+{task_lines}
+
+For each task, return the preferred time of day as exactly one of:
+  "morning"   (before 12pm)
+  "afternoon" (12pm–5pm)
+  "evening"   (after 5pm)
+  "any"       (no preference)
+
+Respond ONLY with a valid JSON object mapping task title to time preference.
+Example: {{"Deep work session": "morning", "Call dentist": "any"}}
+Only include tasks whose preference is clearly indicated by the notes. Use "any" when unsure."""
+
+    print(f"[scheduler] scheduling_notes received — sending to Claude AI prompt:\n"
+          f"--- SCHEDULING NOTES START ---\n{scheduling_notes}\n--- SCHEDULING NOTES END ---")
+
+    try:
+        from anthropic import Anthropic
+        client = Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        print(f"[scheduler] Claude AI scheduling hints response: {raw}")
+
+        if "{" in raw and "}" in raw:
+            json_str = raw[raw.index("{") : raw.rindex("}") + 1]
+            hints = json.loads(json_str)
+            # Normalise values to lowercase
+            return {k: str(v).lower() for k, v in hints.items()}
+
+    except Exception as exc:
+        print(f"[scheduler] AI hint call failed (non-fatal, using algorithmic fallback): {exc}")
+
+    return {}
+
+
 # ── Main engine ───────────────────────────────────────────────────────────────
 
 def generate_weekly_schedule(
@@ -145,6 +221,15 @@ def generate_weekly_schedule(
         db.query(Task)
         .filter(Task.user_id == user_id, Task.status.in_(["pending", "scheduled"]))
         .all()
+    )
+
+    # ── AI scheduling hints from user's plain-language notes ──────────────────
+    scheduling_notes = p("scheduling_notes", None) or ""
+    ai_hints = _get_ai_scheduling_hints(
+        scheduling_notes,
+        tasks,
+        wake_time=preferred_wake_time,
+        bed_time=preferred_bedtime,
     )
 
     # ── Step 2: Build time map ────────────────────────────────────────────────
@@ -341,6 +426,10 @@ def generate_weekly_schedule(
             unscheduled_tasks.append(task)
 
     # ── Flexible tasks — first-fit with optional commute wrapping ────────────
+    # Slot boundaries for AI time-of-day hints
+    MORNING_END   = time_to_slot("12:00")
+    AFTERNOON_END = time_to_slot("17:00")
+
     for task in flexible_tasks:
         task_n = slots_needed(task.duration_minutes)
         task_commute_mins = getattr(task, "commute_minutes", 0) or 0
@@ -348,11 +437,26 @@ def generate_weekly_schedule(
         # Total contiguous slots needed: [commute] + task + [commute]
         total_n = task_commute_n + task_n + task_commute_n
 
+        # AI-suggested time-of-day preference for this task
+        hint = ai_hints.get(task.title, "any").lower()
+        if hint == "morning":
+            pref_start, pref_end = wake_slot + routine_slots, MORNING_END
+        elif hint == "afternoon":
+            pref_start, pref_end = MORNING_END, AFTERNOON_END
+        elif hint == "evening":
+            pref_start, pref_end = AFTERNOON_END, night_routine_start
+        else:
+            pref_start, pref_end = wake_slot + routine_slots, night_routine_start
+
         placed = False
         for day_idx in range(7):
+            # Try preferred window first (from AI hint), then full day as fallback
             ts = find_free_slot(time_map, day_idx, total_n,
-                                start_from=wake_slot + routine_slots,
-                                end_before=night_routine_start)
+                                start_from=pref_start, end_before=pref_end)
+            if ts is None:
+                ts = find_free_slot(time_map, day_idx, total_n,
+                                    start_from=wake_slot + routine_slots,
+                                    end_before=night_routine_start)
             if ts is not None:
                 day_date = week_start_date + timedelta(days=day_idx)
 
