@@ -1,4 +1,5 @@
 import Link from "next/link";
+import ScheduleRedirect from "@/components/ScheduleRedirect";
 
 export const metadata = {
   title: "Sunday — Life scheduling, reimagined",
@@ -62,6 +63,7 @@ const AVATARS = [
 export default function LandingPage() {
   return (
     <div className="bg-white">
+      <ScheduleRedirect />
       {/* ── Standalone nav ── */}
       <header className="sticky top-0 z-50 h-14 bg-white/90 backdrop-blur-md border-b border-zinc-100 flex items-center">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 w-full flex items-center justify-between">

@@ -36,9 +36,8 @@ function getWeekNumber(d: Date): number {
 function blockMins(b: ScheduleBlock): number {
   const [sh, sm] = b.start_time.split(":").map(Number);
   const [eh, em] = b.end_time.split(":").map(Number);
-  // "00:00" end_time = midnight end-of-day (1440 min), not zero
-  const endMins = eh === 0 && em === 0 ? 1440 : eh * 60 + em;
-  return endMins - (sh * 60 + sm);
+  const raw = (eh * 60 + em) - (sh * 60 + sm);
+  return Math.max(0, raw < 0 ? raw + 1440 : raw);
 }
 
 function fmt12(t: string): string {

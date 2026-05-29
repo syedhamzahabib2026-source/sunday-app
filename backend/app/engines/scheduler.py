@@ -248,6 +248,18 @@ def generate_weekly_schedule(
     commute_minutes         = p("commute_minutes",        30)
     is_remote               = p("is_remote",              False)
 
+    # AI mode: apply sensible universal defaults (no commute, 3 meals, gym 3×, no Muay Thai)
+    if p("mode", "manual") == "ai":
+        preferred_wake_time     = "07:00"
+        preferred_bedtime       = "23:00"
+        morning_routine_mins    = 30
+        night_routine_mins      = 20
+        meals_per_day           = 3
+        gym_days_per_week       = 3
+        muay_thai_days_per_week = 0
+        commute_minutes         = 0
+        is_remote               = True
+
     tasks: List[Task] = (
         db.query(Task)
         .filter(Task.user_id == user_id, Task.status.in_(["pending", "scheduled"]))
