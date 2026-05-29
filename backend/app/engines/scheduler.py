@@ -3,6 +3,7 @@ Core scheduling engine for Sunday V1.
 Generates a full 7-day ScheduleBlock list for a user, working from a
 30-minute slot grid and inserting blocks in strict priority order.
 """
+import json
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,12 @@ PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "optional": 4
 # Preferred day indices (0=Mon … 6=Sun)
 GYM_PREFERRED = [0, 2, 4, 1, 3, 5, 6]   # Mon/Wed/Fri first
 MT_PREFERRED  = [1, 3, 0, 2, 4, 5, 6]   # Tue/Thu first
+
+# Day-name → weekday index for fixed-time task placement
+DAY_NAME_TO_IDX = {
+    "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
+    "Friday": 4, "Saturday": 5, "Sunday": 6,
+}
 
 
 # ── Time helpers ──────────────────────────────────────────────────────────────
@@ -266,24 +273,111 @@ def generate_weekly_schedule(
             blocks.append(_block(user_id, day_date, "muay_thai", "Muay Thai", ms, mt_slots))
             mt_assigned += 1
 
-    # ── 3g: Tasks — priority-sorted, first-fit across the week ───────────────
+    # ── 3g: Tasks — priority-sorted; fixed tasks placed first ────────────────
     sorted_tasks = sorted(tasks, key=lambda t: PRIORITY_ORDER.get(t.priority, 99))
     unscheduled_tasks: List[Task] = []
 
-    for task in sorted_tasks:
+    # Partition into fixed (is_flexible=False with fixed_start_time) and flexible
+    fixed_tasks    = [t for t in sorted_tasks
+                      if not t.is_flexible and getattr(t, "fixed_start_time", None)]
+    flexible_tasks = [t for t in sorted_tasks
+                      if t.is_flexible or not getattr(t, "fixed_start_time", None)]
+
+    # ── Fixed tasks — placed at their exact time on the specified day(s) ─────
+    for task in fixed_tasks:
+        start_slot = time_to_slot(task.fixed_start_time)
+        end_slot   = time_to_slot(task.fixed_end_time) if task.fixed_end_time else start_slot + 1
+        task_n     = max(1, end_slot - start_slot)
+        task_commute_mins = getattr(task, "commute_minutes", 0) or 0
+        task_commute_n    = slots_needed(task_commute_mins) if task_commute_mins else 0
+
+        days_list: List[str] = []
+        try:
+            if task.preferred_days:
+                days_list = json.loads(task.preferred_days)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        placed = False
+        for day_name in days_list:
+            day_idx = DAY_NAME_TO_IDX.get(day_name)
+            if day_idx is None:
+                continue
+
+            day_date = week_start_date + timedelta(days=day_idx)
+
+            # Conflict check: are the task slots already occupied?
+            if any(time_map[day_idx][s]
+                   for s in range(start_slot, min(start_slot + task_n, SLOTS_PER_DAY))):
+                unscheduled_tasks.append(task)
+                break
+
+            # Commute block before task (if slot is free and within waking hours)
+            if task_commute_n > 0:
+                before_start = max(wake_slot, start_slot - task_commute_n)
+                if before_start >= wake_slot and before_start + task_commute_n <= start_slot:
+                    mark_occupied(time_map, day_idx, before_start, task_commute_n)
+                    blocks.append(_block(user_id, day_date, "commute", "Commute",
+                                         before_start, task_commute_n))
+
+            # Task block (locked — reorganizer will not move it)
+            mark_occupied(time_map, day_idx, start_slot, task_n)
+            blocks.append(_block(user_id, day_date, "task", task.title,
+                                  start_slot, task_n,
+                                  task_id=task.id, priority=task.priority,
+                                  is_locked=True))
+
+            # Commute block after task
+            if task_commute_n > 0:
+                after_start = start_slot + task_n
+                if after_start + task_commute_n <= night_routine_start:
+                    mark_occupied(time_map, day_idx, after_start, task_commute_n)
+                    blocks.append(_block(user_id, day_date, "commute", "Return Commute",
+                                         after_start, task_commute_n))
+
+            placed = True
+
+        if not placed and task not in unscheduled_tasks:
+            unscheduled_tasks.append(task)
+
+    # ── Flexible tasks — first-fit with optional commute wrapping ────────────
+    for task in flexible_tasks:
         task_n = slots_needed(task.duration_minutes)
+        task_commute_mins = getattr(task, "commute_minutes", 0) or 0
+        task_commute_n    = slots_needed(task_commute_mins) if task_commute_mins else 0
+        # Total contiguous slots needed: [commute] + task + [commute]
+        total_n = task_commute_n + task_n + task_commute_n
+
         placed = False
         for day_idx in range(7):
-            ts = find_free_slot(time_map, day_idx, task_n,
+            ts = find_free_slot(time_map, day_idx, total_n,
                                 start_from=wake_slot + routine_slots,
                                 end_before=night_routine_start)
             if ts is not None:
                 day_date = week_start_date + timedelta(days=day_idx)
-                mark_occupied(time_map, day_idx, ts, task_n)
-                blocks.append(_block(user_id, day_date, "task", task.title, ts, task_n,
-                                     task_id=task.id, priority=task.priority))
+
+                if task_commute_n > 0:
+                    # Commute before
+                    mark_occupied(time_map, day_idx, ts, task_commute_n)
+                    blocks.append(_block(user_id, day_date, "commute", "Commute",
+                                         ts, task_commute_n))
+
+                task_start = ts + task_commute_n
+                mark_occupied(time_map, day_idx, task_start, task_n)
+                blocks.append(_block(user_id, day_date, "task", task.title,
+                                      task_start, task_n,
+                                      task_id=task.id, priority=task.priority))
+
+                if task_commute_n > 0:
+                    # Return commute
+                    return_start = task_start + task_n
+                    mark_occupied(time_map, day_idx, return_start, task_commute_n)
+                    blocks.append(_block(user_id, day_date, "commute", "Return Commute",
+                                         return_start, task_commute_n))
+
                 placed = True
                 break
+
         if not placed:
             unscheduled_tasks.append(task)
 

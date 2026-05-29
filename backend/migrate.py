@@ -52,6 +52,9 @@ def run_migrations() -> None:
     # 2. Columns added after initial schema (ALTER TABLE, idempotent)
     _add_column_if_missing("tasks", "original_priority", "VARCHAR")
     _add_column_if_missing("tasks", "bumped_from",       "VARCHAR")
+    _add_column_if_missing("tasks", "fixed_start_time",  "VARCHAR")
+    _add_column_if_missing("tasks", "fixed_end_time",    "VARCHAR")
+    _add_column_if_missing("tasks", "commute_minutes",   "INTEGER DEFAULT 0")
 
     print("  [migrate] all migrations applied")
 

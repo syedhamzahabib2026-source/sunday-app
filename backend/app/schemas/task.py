@@ -18,6 +18,9 @@ class TaskCreate(BaseModel):
     is_flexible: bool = True
     timing_preference: Optional[str] = "ai_decide"
     preferred_days: Optional[str] = None  # JSON-encoded list
+    fixed_start_time: Optional[str] = None   # "HH:MM" 24h — only for fixed tasks
+    fixed_end_time:   Optional[str] = None   # "HH:MM" 24h
+    commute_minutes:  Optional[int] = 0      # one-way travel time in minutes
 
 
 class TaskStatusUpdate(BaseModel):
@@ -37,6 +40,9 @@ class TaskResponse(BaseModel):
     status: str
     timing_preference: Optional[str]
     preferred_days: Optional[str]
+    fixed_start_time: Optional[str]
+    fixed_end_time:   Optional[str]
+    commute_minutes:  Optional[int]
     original_priority: Optional[str]
     bumped_from: Optional[str]
     created_at: datetime

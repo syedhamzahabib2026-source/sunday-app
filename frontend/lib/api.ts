@@ -157,6 +157,9 @@ export interface TaskCreatePayload {
   is_flexible: boolean;
   timing_preference?: string;
   preferred_days?: string | null;
+  fixed_start_time?: string | null;
+  fixed_end_time?: string | null;
+  commute_minutes?: number;
 }
 
 export function createTask(data: TaskCreatePayload): Promise<Task> {
