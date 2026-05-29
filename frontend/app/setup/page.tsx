@@ -21,6 +21,8 @@ const LOADING_MESSAGES = [
   "Building your week...",
 ];
 
+const DRAFT_KEY = "sunday_setup_draft";
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Priority    = "critical" | "high" | "medium" | "low" | "optional";
@@ -70,6 +72,13 @@ interface WizardData {
   extra_context: string;
 }
 
+interface DraftState {
+  savedAt: string;
+  mode: Mode;
+  step: number;
+  data: WizardData;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function toLocalDateString(d: Date): string {
@@ -115,6 +124,18 @@ function fmtDuration(mins: number): string {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function formatDraftDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-US", {
+      month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit",
+    });
+  } catch {
+    return "earlier";
+  }
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -746,7 +767,7 @@ function DraftTaskForm({ onAdd, onCancel }: {
           <p className="text-[13px] font-semibold text-indigo-800 mb-0.5">Sleep is already protected</p>
           <p className="text-[13px] text-indigo-600 leading-relaxed">
             Sunday automatically blocks your sleep window every night.{" "}
-            <a href="/setup" className="underline hover:no-underline font-medium">
+            <a href="/setup?step=1" className="underline hover:no-underline font-medium">
               Set your sleep schedule in Setup
             </a>{" "}
             — you never need to add it as a task.
@@ -1050,6 +1071,55 @@ function DoneScreen() {
   );
 }
 
+// ─── DRAFT PROMPT ─────────────────────────────────────────────────────────────
+
+function DraftPrompt({ draft, onResume, onDiscard }: {
+  draft: DraftState;
+  onResume: () => void;
+  onDiscard: () => void;
+}) {
+  const taskCount = draft.data.tasks.length;
+  return (
+    <div className="w-full max-w-lg mx-auto fade-in">
+      <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-6 text-2xl">
+        📋
+      </div>
+      <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-3 tracking-tight">
+        You have a saved draft
+      </h1>
+      <p className="text-[16px] text-gray-500 mb-2 leading-relaxed">
+        From {formatDraftDate(draft.savedAt)}
+      </p>
+      <p className="text-[14px] text-gray-400 mb-10">
+        {taskCount > 0
+          ? `${taskCount} task${taskCount !== 1 ? "s" : ""} added · ${draft.mode} mode · step ${draft.step}`
+          : `${draft.mode} mode · step ${draft.step}`}
+      </p>
+
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={onResume}
+          className="w-full py-4 rounded-2xl bg-indigo-600 text-white text-[15px] font-semibold hover:bg-indigo-700 transition-colors"
+        >
+          Continue where I left off →
+        </button>
+        <button
+          type="button"
+          onClick={onDiscard}
+          className="w-full py-4 rounded-2xl border-2 border-gray-200 text-gray-600 text-[15px] font-medium hover:border-gray-300 hover:bg-gray-50 transition-colors"
+        >
+          Start fresh
+        </button>
+      </div>
+
+      <p className="text-[12px] text-gray-400 text-center mt-4">
+        Starting fresh will clear your saved progress.
+      </p>
+    </div>
+  );
+}
+
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
 export default function SetupPage() {
@@ -1061,6 +1131,67 @@ export default function SetupPage() {
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
   const [errMsg,        setErrMsg]        = useState<string | null>(null);
   const [done,          setDone]          = useState(false);
+  const [draft,         setDraft]         = useState<DraftState | null>(null);
+  const [draftChecked,  setDraftChecked]  = useState(false);
+
+  // On mount: check for saved draft, then fall back to ?step= query param
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const parsed: DraftState = JSON.parse(raw);
+        if (parsed.mode && parsed.data && parsed.step) {
+          setDraft(parsed);
+          setDraftChecked(true);
+          return; // draft takes priority over query param
+        }
+      }
+    } catch {
+      // ignore corrupt storage
+    }
+
+    // No draft — check ?step= query param (Bug 1 fix)
+    const params = new URLSearchParams(window.location.search);
+    const stepParam = params.get("step");
+    if (stepParam === "1") {
+      setMode("manual");
+      setStep(1);
+    }
+
+    setDraftChecked(true);
+  }, []);
+
+  // Debounced draft save — triggers on any data/mode/step change
+  useEffect(() => {
+    if (!draftChecked || mode === null || done) return;
+    const timer = setTimeout(() => {
+      try {
+        const toSave: DraftState = {
+          savedAt: new Date().toISOString(),
+          mode,
+          step,
+          data,
+        };
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(toSave));
+      } catch {
+        // ignore storage quota errors
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [data, mode, step, draftChecked, done]);
+
+  function resumeDraft() {
+    if (!draft) return;
+    setMode(draft.mode);
+    setStep(draft.step);
+    setData(draft.data);
+    setDraft(null);
+  }
+
+  function discardDraft() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    setDraft(null);
+  }
 
   useEffect(() => {
     if (!generating) return;
@@ -1171,6 +1302,7 @@ export default function SetupPage() {
       }
 
       await generateSchedule(USER_ID, weekStart);
+      try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
       setGenerating(false);
       setDone(true);
     } catch (e) {
@@ -1210,6 +1342,8 @@ export default function SetupPage() {
       <div className="min-h-screen flex flex-col items-center justify-center px-6 py-24">
         {done ? (
           <DoneScreen />
+        ) : draft !== null && draftChecked ? (
+          <DraftPrompt draft={draft} onResume={resumeDraft} onDiscard={discardDraft} />
         ) : mode === null ? (
           <ModeScreen onSelect={selectMode} />
         ) : (
