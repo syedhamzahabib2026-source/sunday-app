@@ -195,6 +195,80 @@ function Stepper({ label, value, onChange, min = 0, max = 180, step = 5, unit = 
   );
 }
 
+// ─── Duration Input (hours + minutes) ────────────────────────────────────────
+
+function fmtTaskDuration(totalMins: number): string {
+  if (totalMins <= 0) return "—";
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h} hr${h !== 1 ? "s" : ""}`;
+  return `${h} hr${h !== 1 ? "s" : ""} ${m} min`;
+}
+
+function HrMinInput({ value, onChange }: { value: number; onChange: (mins: number) => void }) {
+  const hrs = Math.floor(value / 60);
+  const mins = value % 60;
+
+  function setHrs(h: number) {
+    const clamped = Math.max(0, Math.min(16, h));
+    // Keep at least 15 min when hours drop to 0
+    const newMins = clamped === 0 && mins === 0 ? 15 : mins;
+    onChange(clamped * 60 + newMins);
+  }
+  function setMins(m: number) {
+    // When hours is 0 and user picks 0 min, snap to 15
+    if (hrs === 0 && m === 0) { onChange(15); return; }
+    onChange(hrs * 60 + m);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-4">
+        {/* Hours counter */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHrs(hrs - 1)}
+            disabled={hrs === 0}
+            className="w-8 h-8 rounded-lg border border-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-50 transition-colors disabled:opacity-30 select-none text-lg leading-none"
+          >
+            −
+          </button>
+          <span className="text-[16px] font-semibold text-gray-900 w-5 text-center tabular-nums">{hrs}</span>
+          <button
+            type="button"
+            onClick={() => setHrs(hrs + 1)}
+            disabled={hrs >= 16}
+            className="w-8 h-8 rounded-lg border border-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-50 transition-colors disabled:opacity-30 select-none text-lg leading-none"
+          >
+            +
+          </button>
+          <span className="text-[13px] text-gray-500 font-medium">hr</span>
+        </div>
+
+        <span className="text-gray-200 select-none">·</span>
+
+        {/* Minutes dropdown */}
+        <div className="flex items-center gap-2">
+          <select
+            value={mins}
+            onChange={e => setMins(Number(e.target.value))}
+            className="border border-gray-200 rounded-lg px-2.5 py-1.5 text-[14px] text-gray-900 bg-white focus:outline-none focus:border-indigo-300 transition-colors"
+          >
+            {(hrs === 0 ? [15, 30, 45] : [0, 15, 30, 45]).map(m => (
+              <option key={m} value={m}>{m} min</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <p className="text-[12px] text-indigo-600 font-medium">{fmtTaskDuration(value)}</p>
+    </div>
+  );
+}
+
+// ─── Chip selectors ───────────────────────────────────────────────────────────
+
 function Chips<T extends string>({ options, value, onChange, multi = false }: {
   options: { value: T; label: string }[];
   value: T | T[];
@@ -297,7 +371,7 @@ function ModeScreen({ onSelect }: { onSelect: (m: Mode) => void }) {
 function Step1({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
   const sleepHours = calcSleepHours(data.preferred_bedtime, data.preferred_wake_time);
   return (
-    <StepShell headline="When do you sleep?" subtext="Sunday will protect this time every single night.">
+    <StepShell headline="When do you sleep?" subtext="Let's protect your sleep first. Sunday will block this time automatically, every single night.">
       <div className="flex flex-col sm:flex-row items-center justify-center gap-10 mb-10">
         <TimePicker label="Bedtime" value={data.preferred_bedtime}
           onChange={v => { set("preferred_bedtime", v); set("sleep_target_hours", calcSleepHours(v, data.preferred_wake_time)); }} />
@@ -329,6 +403,10 @@ function Step1({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
           ))}
         </div>
       </div>
+      {/* Sleep-as-constraint reinforcement */}
+      <p className="text-center text-[13px] text-gray-400 mt-6 leading-relaxed max-w-sm mx-auto">
+        Sunday will always block this time off. You never need to add sleep as a task.
+      </p>
     </StepShell>
   );
 }
@@ -635,7 +713,10 @@ function DraftTaskForm({ onAdd, onCancel }: {
   const togglePrefDay = (full: string) =>
     setPrefDays(d => d.includes(full) ? d.filter(x => x !== full) : [...d, full]);
 
-  const canAdd = title.trim().length > 0;
+  const SLEEP_KEYWORDS = ["sleep", "sleeping", "bed", "bedtime", "nap", "napping"];
+  const isSleepWord = SLEEP_KEYWORDS.some(k => title.trim().toLowerCase().includes(k));
+
+  const canAdd = title.trim().length > 0 && !isSleepWord && duration >= 15;
 
   const handleAdd = () => {
     if (!canAdd) return;
@@ -659,10 +740,27 @@ function DraftTaskForm({ onAdd, onCancel }: {
         onKeyDown={e => { if (e.key === "Enter" && canAdd) handleAdd(); }}
         className="w-full px-4 py-3 rounded-xl border border-gray-200 text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 bg-white" />
 
-      {/* Duration */}
-      <div className="bg-white rounded-xl border border-gray-100">
-        <Stepper label="Duration" value={duration} onChange={setDuration} min={15} max={240} step={15} />
-      </div>
+      {/* Sleep keyword warning */}
+      {isSleepWord && title.trim().length > 0 && (
+        <div className="rounded-xl bg-indigo-50 border border-indigo-100 px-4 py-3 fade-in">
+          <p className="text-[13px] font-semibold text-indigo-800 mb-0.5">Sleep is already protected</p>
+          <p className="text-[13px] text-indigo-600 leading-relaxed">
+            Sunday automatically blocks your sleep window every night.{" "}
+            <a href="/setup" className="underline hover:no-underline font-medium">
+              Set your sleep schedule in Setup
+            </a>{" "}
+            — you never need to add it as a task.
+          </p>
+        </div>
+      )}
+
+      {/* Duration (hours + minutes) */}
+      {!isSleepWord && (
+        <div className="bg-white rounded-xl border border-gray-100 px-4 py-3">
+          <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Duration</p>
+          <HrMinInput value={duration} onChange={setDuration} />
+        </div>
+      )}
 
       {/* Priority */}
       <div>
