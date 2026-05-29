@@ -720,9 +720,10 @@ function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
 
 // ─── TASKS STEP ───────────────────────────────────────────────────────────────
 
-function DraftTaskForm({ onAdd, onCancel }: {
+function DraftTaskForm({ onAdd, onCancel, mode }: {
   onAdd: (t: WizardTask) => void;
   onCancel: () => void;
+  mode?: Mode | null;
 }) {
   const [title,        setTitle]       = useState("");
   const [duration,     setDuration]    = useState(30);
@@ -761,17 +762,25 @@ function DraftTaskForm({ onAdd, onCancel }: {
         onKeyDown={e => { if (e.key === "Enter" && canAdd) handleAdd(); }}
         className="w-full px-4 py-3 rounded-xl border border-gray-200 text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 bg-white" />
 
-      {/* Sleep keyword warning */}
+      {/* Sleep keyword warning — context-aware by mode */}
       {isSleepWord && title.trim().length > 0 && (
         <div className="rounded-xl bg-indigo-50 border border-indigo-100 px-4 py-3 fade-in">
           <p className="text-[13px] font-semibold text-indigo-800 mb-0.5">Sleep is already protected</p>
-          <p className="text-[13px] text-indigo-600 leading-relaxed">
-            Sunday automatically blocks your sleep window every night.{" "}
-            <a href="/setup?step=1" className="underline hover:no-underline font-medium">
-              Set your sleep schedule in Setup
-            </a>{" "}
-            — you never need to add it as a task.
-          </p>
+          {mode === "ai" ? (
+            <p className="text-[13px] text-indigo-600 leading-relaxed">
+              In AI mode, Sunday automatically protects your sleep every night. No setup needed.
+            </p>
+          ) : (
+            <p className="text-[13px] text-indigo-600 leading-relaxed">
+              Sunday automatically blocks your sleep window every night.{" "}
+              <a href="/setup?step=1" className="underline hover:no-underline font-medium">
+                {mode === "manual"
+                  ? "Set your sleep window in Setup Step 1"
+                  : "Adjust it in your Setup preferences"}
+              </a>{" "}
+              — you never need to add it as a task.
+            </p>
+          )}
         </div>
       )}
 
@@ -870,7 +879,11 @@ function DraftTaskForm({ onAdd, onCancel }: {
   );
 }
 
-function TasksStep({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+function TasksStep({ data, set, mode }: {
+  data: WizardData;
+  set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void;
+  mode?: Mode | null;
+}) {
   const [showForm, setShowForm] = useState(false);
 
   const addTask = (t: WizardTask) => {
@@ -927,7 +940,7 @@ function TasksStep({ data, set }: { data: WizardData; set: <K extends keyof Wiza
       {/* Draft form */}
       {showForm && (
         <div className="mb-4 fade-in">
-          <DraftTaskForm onAdd={addTask} onCancel={() => setShowForm(false)} />
+          <DraftTaskForm onAdd={addTask} onCancel={() => setShowForm(false)} mode={mode} />
         </div>
       )}
 
@@ -1235,11 +1248,11 @@ export default function SetupPage() {
       if (step === 1) return <Step1 {...props} />;
       if (step === 2) return <Step2 {...props} />;
       if (step === 3) return <Step3 {...props} />;
-      if (step === 4) return <TasksStep {...props} />;
+      if (step === 4) return <TasksStep {...props} mode={mode} />;
       if (step === 5) return <ReviewStep data={data} set={set} mode={mode} />;
     }
     if (mode === "ai") {
-      if (step === 1) return <TasksStep {...props} />;
+      if (step === 1) return <TasksStep {...props} mode={mode} />;
       if (step === 2) return <ReviewStep data={data} set={set} mode={mode} />;
     }
     return null;
