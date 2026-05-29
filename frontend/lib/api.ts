@@ -1,4 +1,4 @@
-const BASE = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080"}/api/v1`;
+const BASE = `${process.env.NEXT_PUBLIC_API_URL ?? "https://sunday-app-production-d774.up.railway.app"}/api/v1`;
 
 export type BlockType =
   | "task"
@@ -137,10 +137,18 @@ export function savePreferences(
   });
 }
 
-export function generateSchedule(userId: number, weekStart: string): Promise<GenerateResult> {
+export function generateSchedule(
+  userId: number,
+  weekStart: string,
+  generationTimestamp?: string,
+): Promise<GenerateResult> {
   return apiFetch("/schedule/generate", {
     method: "POST",
-    body: JSON.stringify({ user_id: userId, week_start_date: weekStart }),
+    body: JSON.stringify({
+      user_id: userId,
+      week_start_date: weekStart,
+      ...(generationTimestamp ? { generation_timestamp: generationTimestamp } : {}),
+    }),
   });
 }
 

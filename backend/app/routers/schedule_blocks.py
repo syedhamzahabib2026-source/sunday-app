@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -81,7 +81,8 @@ def lock_block(block_id: int, db: Session = Depends(get_db)):
 
 class GenerateScheduleRequest(BaseModel):
     user_id: int
-    week_start_date: str   # "YYYY-MM-DD"
+    week_start_date: str            # "YYYY-MM-DD"
+    generation_timestamp: Optional[str] = None  # ISO 8601 from client
 
 
 @router.post("/generate")
@@ -95,7 +96,10 @@ def generate_schedule(
     except ValueError:
         raise HTTPException(status_code=422, detail="week_start_date must be YYYY-MM-DD")
 
-    result = generate_weekly_schedule(payload.user_id, week_start, db)
+    result = generate_weekly_schedule(
+        payload.user_id, week_start, db,
+        generation_timestamp=payload.generation_timestamp,
+    )
 
     return {
         "week_start":    str(result["week_start"]),

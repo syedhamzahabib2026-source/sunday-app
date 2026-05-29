@@ -89,12 +89,11 @@ function toLocalDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function getNextMonday(): Date {
+function getCurrentMonday(): Date {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const dow = today.getDay();
-  if (dow === 1) return today;
-  const diff = dow === 0 ? 1 : 8 - dow;
+  const dow = today.getDay(); // 0=Sun, 1=Mon … 6=Sat
+  const diff = dow === 0 ? -6 : 1 - dow; // Sunday → back 6; else → back to Monday
   const d = new Date(today);
   d.setDate(today.getDate() + diff);
   return d;
@@ -1441,7 +1440,8 @@ export default function SetupPage() {
     setErrMsg(null);
     setLoadingMsgIdx(0);
     try {
-      const weekStart = toLocalDateString(getNextMonday());
+      const generationTimestamp = new Date().toISOString();
+      const weekStart = toLocalDateString(getCurrentMonday());
       const serializedCommitments = data.fixed_commitments.map(c =>
         JSON.stringify({ name: c.name, time: c.time, duration: c.duration, days: c.days })
       );
@@ -1496,12 +1496,13 @@ export default function SetupPage() {
         });
       }
 
-      await generateSchedule(USER_ID, weekStart);
+      await generateSchedule(USER_ID, weekStart, generationTimestamp);
       try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
       setGenerating(false);
       setDone(true);
     } catch (e) {
-      setErrMsg(String(e));
+      console.error("[Sunday] Schedule generation failed:", e);
+      setErrMsg("Could not reach Sunday's server. Please try again.");
       setGenerating(false);
     }
   }

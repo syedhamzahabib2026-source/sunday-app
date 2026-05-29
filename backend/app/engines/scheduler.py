@@ -5,7 +5,7 @@ Generates a full 7-day ScheduleBlock list for a user, working from a
 """
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -184,6 +184,7 @@ def generate_weekly_schedule(
     user_id: int,
     week_start_date: date,
     db: Session,
+    generation_timestamp: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate a full 7-day schedule for `user_id` starting on `week_start_date`.
@@ -195,6 +196,36 @@ def generate_weekly_schedule(
             "unscheduled_tasks": List[Task],
         }
     """
+
+    # ── Schedule-start window ─────────────────────────────────────────────────
+    # schedule_start = generation_timestamp + 1 hr, rounded up to next 15 min.
+    # Blocks are only created on/after schedule_start_date and at/after
+    # schedule_start_slot (for the partial first day).
+    if generation_timestamp:
+        try:
+            ts_str = generation_timestamp.replace("Z", "+00:00")
+            ts_aware = datetime.fromisoformat(ts_str)
+            # Normalise to UTC naive so arithmetic is consistent with server times
+            ts = ts_aware.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            ts = datetime.utcnow()
+    else:
+        ts = datetime.utcnow()
+
+    schedule_start_dt = ts + timedelta(hours=1)
+    rem = schedule_start_dt.minute % 15
+    if rem != 0:
+        schedule_start_dt += timedelta(minutes=(15 - rem))
+    schedule_start_dt = schedule_start_dt.replace(second=0, microsecond=0)
+
+    schedule_start_date: date = schedule_start_dt.date()
+    schedule_start_slot: int  = time_to_slot(
+        f"{schedule_start_dt.hour:02d}:{schedule_start_dt.minute:02d}"
+    )
+
+    print(f"[scheduler] generation_ts={generation_timestamp} "
+          f"schedule_start={schedule_start_date} slot={schedule_start_slot} "
+          f"({slot_to_time(schedule_start_slot)})")
 
     # ── Step 1: Load inputs ───────────────────────────────────────────────────
     prefs: Optional[WeeklyPreferences] = (
@@ -246,11 +277,19 @@ def generate_weekly_schedule(
     # Night routine starts just before bed, never overlapping morning routine
     night_routine_start = max(wake_slot + routine_slots, bed_slot - night_routine_slots)
 
-    # Pre-mark immovable slots on every day so later passes respect them
+    # Pre-mark immovable slots on every day so later passes respect them.
+    # Past days are fully occupied so find_free_slot naturally skips them.
     for d in range(7):
+        d_date = week_start_date + timedelta(days=d)
+        if d_date < schedule_start_date:
+            mark_occupied(time_map, d, 0, SLOTS_PER_DAY)  # entire past day
+            continue
         mark_occupied(time_map, d, 0, wake_slot)                             # morning sleep
         mark_occupied(time_map, d, bed_slot, SLOTS_PER_DAY - bed_slot)      # evening sleep
         mark_occupied(time_map, d, night_routine_start, night_routine_slots) # night routine
+        if d_date == schedule_start_date and schedule_start_slot > wake_slot:
+            # Also block waking-but-past slots so tasks/gym don't land there
+            mark_occupied(time_map, d, wake_slot, schedule_start_slot - wake_slot)
 
     # ── Step 3: Insert blocks ─────────────────────────────────────────────────
     blocks: List[ScheduleBlock] = []
@@ -260,23 +299,35 @@ def generate_weekly_schedule(
         day_date   = week_start_date + timedelta(days=day_idx)
         is_weekday = day_idx < 5  # Mon-Fri
 
+        # Skip days that are entirely in the past
+        if day_date < schedule_start_date:
+            continue
+
+        # For the partial first day, only create blocks that start at/after cutoff
+        cutoff = schedule_start_slot if day_date == schedule_start_date else 0
+
+        def _ok(start_slot: int) -> bool:
+            return start_slot >= cutoff
+
         # Sleep — morning (00:00 → wake) + evening (bed → midnight)
-        if wake_slot > 0:
+        if wake_slot > 0 and _ok(0):
             blocks.append(_block(user_id, day_date, "sleep", "Sleep",
                                  0, wake_slot, is_locked=True))
-        if bed_slot < SLOTS_PER_DAY:
+        if bed_slot < SLOTS_PER_DAY and _ok(bed_slot):
             blocks.append(_block(user_id, day_date, "sleep", "Sleep",
                                  bed_slot, SLOTS_PER_DAY - bed_slot, is_locked=True))
 
         # Morning routine — immediately after wake
         mark_occupied(time_map, day_idx, wake_slot, routine_slots)
-        blocks.append(_block(user_id, day_date, "routine", "Morning Routine",
-                             wake_slot, routine_slots))
+        if _ok(wake_slot):
+            blocks.append(_block(user_id, day_date, "routine", "Morning Routine",
+                                 wake_slot, routine_slots))
         routine_end = wake_slot + routine_slots
 
         # Night routine — slot already pre-marked; just create the block
-        blocks.append(_block(user_id, day_date, "routine", "Night Routine",
-                             night_routine_start, night_routine_slots))
+        if _ok(night_routine_start):
+            blocks.append(_block(user_id, day_date, "routine", "Night Routine",
+                                 night_routine_start, night_routine_slots))
 
         # Commute — weekdays only when not remote
         after_morning = routine_end
@@ -284,8 +335,9 @@ def generate_weekly_schedule(
             # Morning commute right after routine
             if routine_end + commute_slots <= night_routine_start:
                 mark_occupied(time_map, day_idx, routine_end, commute_slots)
-                blocks.append(_block(user_id, day_date, "commute", "Commute (Morning)",
-                                     routine_end, commute_slots))
+                if _ok(routine_end):
+                    blocks.append(_block(user_id, day_date, "commute", "Commute (Morning)",
+                                         routine_end, commute_slots))
                 after_morning = routine_end + commute_slots
 
             # Evening commute: target ~17:30 (slot 35), scan backwards if needed
@@ -296,8 +348,9 @@ def generate_weekly_schedule(
                                     start_from=after_morning, end_before=night_routine_start)
             if pm is not None:
                 mark_occupied(time_map, day_idx, pm, commute_slots)
-                blocks.append(_block(user_id, day_date, "commute", "Commute (Evening)",
-                                     pm, commute_slots))
+                if _ok(pm):
+                    blocks.append(_block(user_id, day_date, "commute", "Commute (Evening)",
+                                         pm, commute_slots))
 
         # Meals — breakfast just after morning block, lunch ~12:30, dinner ~19:00
         breakfast_slot = after_morning + 1          # 30-min buffer
@@ -321,8 +374,9 @@ def generate_weekly_schedule(
                                     start_from=after_morning, end_before=night_routine_start)
             if ms is not None:
                 mark_occupied(time_map, day_idx, ms, MEAL_DURATION_SLOTS)
-                blocks.append(_block(user_id, day_date, "meal", meal_name,
-                                     ms, MEAL_DURATION_SLOTS))
+                if _ok(ms):
+                    blocks.append(_block(user_id, day_date, "meal", meal_name,
+                                         ms, MEAL_DURATION_SLOTS))
 
     # ── 3e/3f: Gym and Muay Thai across the week ──────────────────────────────
     # Target window: early afternoon ~13:00 (slot 26) to give tasks the morning
@@ -332,13 +386,15 @@ def generate_weekly_schedule(
     for day_idx in GYM_PREFERRED:
         if gym_assigned >= gym_days_per_week:
             break
+        day_date = week_start_date + timedelta(days=day_idx)
+        cutoff = schedule_start_slot if day_date == schedule_start_date else 0
         gs = find_free_slot(time_map, day_idx, gym_slots,
-                            start_from=AFTERNOON_START, end_before=night_routine_start)
+                            start_from=max(AFTERNOON_START, cutoff), end_before=night_routine_start)
         if gs is None:
             gs = find_free_slot(time_map, day_idx, gym_slots,
-                                start_from=wake_slot + routine_slots, end_before=night_routine_start)
+                                start_from=max(wake_slot + routine_slots, cutoff),
+                                end_before=night_routine_start)
         if gs is not None:
-            day_date = week_start_date + timedelta(days=day_idx)
             mark_occupied(time_map, day_idx, gs, gym_slots)
             blocks.append(_block(user_id, day_date, "gym", "Gym", gs, gym_slots))
             gym_assigned += 1
@@ -347,13 +403,15 @@ def generate_weekly_schedule(
     for day_idx in MT_PREFERRED:
         if mt_assigned >= muay_thai_days_per_week:
             break
+        day_date = week_start_date + timedelta(days=day_idx)
+        cutoff = schedule_start_slot if day_date == schedule_start_date else 0
         ms = find_free_slot(time_map, day_idx, mt_slots,
-                            start_from=AFTERNOON_START, end_before=night_routine_start)
+                            start_from=max(AFTERNOON_START, cutoff), end_before=night_routine_start)
         if ms is None:
             ms = find_free_slot(time_map, day_idx, mt_slots,
-                                start_from=wake_slot + routine_slots, end_before=night_routine_start)
+                                start_from=max(wake_slot + routine_slots, cutoff),
+                                end_before=night_routine_start)
         if ms is not None:
-            day_date = week_start_date + timedelta(days=day_idx)
             mark_occupied(time_map, day_idx, ms, mt_slots)
             blocks.append(_block(user_id, day_date, "muay_thai", "Muay Thai", ms, mt_slots))
             mt_assigned += 1
@@ -390,6 +448,12 @@ def generate_weekly_schedule(
                 continue
 
             day_date = week_start_date + timedelta(days=day_idx)
+
+            # Skip days in the past or before schedule_start
+            if day_date < schedule_start_date:
+                continue
+            if day_date == schedule_start_date and start_slot < schedule_start_slot:
+                continue
 
             # Conflict check: are the task slots already occupied?
             if any(time_map[day_idx][s]
