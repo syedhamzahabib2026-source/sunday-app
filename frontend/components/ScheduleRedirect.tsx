@@ -14,6 +14,9 @@ export default function ScheduleRedirect() {
   const router = useRouter();
 
   useEffect(() => {
+    // ?landing=1 is the escape hatch — always show landing page, never redirect
+    if (new URLSearchParams(window.location.search).get("landing") === "1") return;
+
     fetch(`${BASE}/schedule/1/day/${todayStr()}`)
       .then(r => (r.ok ? r.json() : []))
       .then((blocks: unknown) => {

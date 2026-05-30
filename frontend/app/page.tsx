@@ -1,5 +1,6 @@
 import Link from "next/link";
 import ScheduleRedirect from "@/components/ScheduleRedirect";
+import HeroCTA from "@/components/HeroCTA";
 
 export const metadata = {
   title: "Sunday — Life scheduling, reimagined",
@@ -117,18 +118,7 @@ export default function LandingPage() {
             className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-6 fade-up"
             style={{ animationDelay: "180ms" }}
           >
-            <Link
-              href="/setup"
-              className="group w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-indigo-600 text-white text-[15px] font-semibold px-7 py-3.5 rounded-xl hover:bg-indigo-700 transition-all shadow-md hover:shadow-indigo-200 hover:shadow-lg"
-            >
-              Get started free
-              <svg
-                className="w-4 h-4 group-hover:translate-x-1 transition-transform"
-                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </Link>
+            <HeroCTA />
             <a
               href="#how-it-works"
               className="w-full sm:w-auto inline-flex items-center justify-center text-zinc-600 text-[15px] font-medium px-7 py-3.5 rounded-xl hover:text-zinc-900 hover:bg-white transition-all border border-zinc-200 hover:border-zinc-300 hover:shadow-sm"

@@ -32,8 +32,8 @@ export default function Nav() {
       }`}
     >
       <div className="max-w-6xl mx-auto px-4 sm:px-6 w-full h-full flex items-center justify-between gap-4">
-        {/* Logo */}
-        <Link href="/" className="flex items-center gap-1.5 shrink-0 group">
+        {/* Logo — links to landing page (escape hatch from auto-redirect) */}
+        <Link href="/?landing=1" className="flex items-center gap-1.5 shrink-0 group">
           <span className="w-2 h-2 rounded-full bg-indigo-600 group-hover:scale-125 transition-transform duration-150" />
           <span className="text-[15px] font-semibold text-zinc-900 tracking-tight">Sunday</span>
         </Link>
@@ -67,12 +67,6 @@ export default function Nav() {
             title="Settings"
           >
             S
-          </Link>
-          <Link
-            href="/setup"
-            className="hidden sm:inline-flex items-center px-4 py-1.5 bg-indigo-600 text-white text-[13px] font-semibold rounded-full hover:bg-indigo-700 transition-colors shadow-sm hover:shadow-indigo-200 hover:shadow-md"
-          >
-            Get started
           </Link>
         </div>
       </div>
