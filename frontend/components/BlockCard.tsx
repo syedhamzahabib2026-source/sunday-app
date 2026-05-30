@@ -1,13 +1,12 @@
 "use client";
 
-import { useState } from "react";
 import {
   Moon, Utensils, Dumbbell, Car, Sunrise,
   Briefcase, Flame, CheckCircle2,
 } from "lucide-react";
 import { ScheduleBlock } from "@/lib/api";
 
-// ── Block type config ─────────────────────────────────────────────────────────
+// ── Type config ───────────────────────────────────────────────────────────────
 
 interface TypeConfig {
   color: string;
@@ -72,6 +71,47 @@ function fmtTimeRange(start: string, end: string): string {
     : `${fmt(start)} ${sp} – ${fmt(end)} ${ep}`;
 }
 
+// ── Action config ─────────────────────────────────────────────────────────────
+
+type ActionId = "done" | "skip" | "miss";
+interface ActionDef {
+  id: ActionId;
+  label: string;
+  icon: string;
+  style: "green" | "zinc" | "red";
+}
+
+const BTN: Record<string, string> = {
+  green: "text-green-700 bg-green-50 border-green-200 hover:bg-green-100",
+  zinc:  "text-zinc-500  bg-zinc-50  border-zinc-200  hover:bg-zinc-100",
+  red:   "text-red-700   bg-red-50   border-red-200   hover:bg-red-100",
+};
+
+function getActions(bt: string, isTask: boolean): ActionDef[] {
+  if (bt === "sleep") return [
+    { id: "done", label: "Done",     icon: "✓", style: "green" },
+  ];
+  if (bt === "meal" || bt === "routine") return [
+    { id: "done", label: "Done",    icon: "✓", style: "green" },
+    { id: "skip", label: "Skipped", icon: "✗", style: "red"   },
+  ];
+  if (isTask) return [
+    { id: "done", label: "Complete", icon: "✓", style: "green" },
+    { id: "skip", label: "Skip",     icon: "⟳", style: "zinc"  },
+    { id: "miss", label: "Miss",     icon: "✗", style: "red"   },
+  ];
+  if (bt === "gym" || bt === "muay_thai") return [
+    { id: "done", label: "Done",   icon: "✓", style: "green" },
+    { id: "skip", label: "Skip",   icon: "⟳", style: "zinc"  },
+    { id: "miss", label: "Missed", icon: "✗", style: "red"   },
+  ];
+  // commute, event, buffer
+  return [
+    { id: "done", label: "Done", icon: "✓", style: "green" },
+    { id: "skip", label: "Skip", icon: "⟳", style: "zinc"  },
+  ];
+}
+
 // ── Priority badge ────────────────────────────────────────────────────────────
 
 function PriorityBadge({ priority }: { priority: string | null }) {
@@ -92,100 +132,105 @@ function PriorityBadge({ priority }: { priority: string | null }) {
 
 interface Props {
   block: ScheduleBlock;
-  onComplete?: (blockId: number, taskId: number) => Promise<void>;
-  onMiss?: (blockId: number, taskId: number) => Promise<void>;
-  onSkip?: (blockId: number, taskId: number) => Promise<void>;
+  isExpanded?: boolean;
+  onToggle?: () => void;
+  onAction?: (blockId: number, taskId: number | null, action: ActionId) => void;
   completed?: boolean;
   missed?: boolean;
   isCurrent?: boolean;
 }
 
 export default function BlockCard({
-  block, onComplete, onMiss, onSkip,
+  block, isExpanded, onToggle, onAction,
   completed, missed, isCurrent,
 }: Props) {
-  const [loading, setLoading] = useState<"complete" | "miss" | "skip" | null>(null);
-  const isTask = block.block_type === "task" && block.task_id != null;
-  const mins = durationMins(block);
-  const config = TYPE_CONFIG[block.block_type] ?? TYPE_CONFIG.task;
+  const isTask     = block.block_type === "task" && block.task_id != null;
+  const mins       = durationMins(block);
+  const config     = TYPE_CONFIG[block.block_type] ?? TYPE_CONFIG.task;
   const { Icon, label } = config;
   const accentColor = getAccentColor(block);
+  const actions    = getActions(block.block_type, isTask);
+  const isClickable = !completed && !missed;
 
-  async function handle(type: "complete" | "miss" | "skip") {
-    if (!block.task_id) return;
-    setLoading(type);
-    try {
-      if (type === "complete") await onComplete?.(block.id, block.task_id);
-      else if (type === "miss")     await onMiss?.(block.id, block.task_id);
-      else                          await onSkip?.(block.id, block.task_id);
-    } finally { setLoading(null); }
-  }
-
-  // Card visual state
   const cardBg =
-    missed    ? "bg-red-50/40 border-red-200" :
-    completed ? "bg-zinc-50 border-zinc-200 opacity-70" :
-    isCurrent ? "bg-indigo-50/50 border-indigo-200" :
-                "bg-white border-zinc-200 shadow-sm hover:shadow-md hover:border-zinc-300";
+    missed      ? "bg-red-50/40 border-red-200" :
+    completed   ? "bg-zinc-50 border-zinc-200 opacity-70" :
+    isExpanded  ? "bg-white border-indigo-300 ring-2 ring-indigo-100" :
+    isCurrent   ? "bg-indigo-50/50 border-indigo-200" :
+                  "bg-white border-zinc-200 shadow-sm hover:shadow-md hover:border-zinc-300";
 
-  const leftBarColor = missed ? "#dc2626" : isCurrent ? "#6366f1" : accentColor;
-  const leftBarWidth = isCurrent ? "w-1.5" : "w-1";
+  const leftColor  = missed ? "#dc2626" : (isCurrent || isExpanded) ? "#6366f1" : accentColor;
+  const leftWidth  = isCurrent || isExpanded ? "w-1.5" : "w-1";
 
   return (
-    <div className={`relative flex items-stretch rounded-xl border overflow-hidden transition-all ${cardBg}`}>
-      {/* Left color bar */}
-      <div className={`${leftBarWidth} shrink-0 self-stretch`} style={{ backgroundColor: leftBarColor }} />
+    <div
+      className={`relative flex items-stretch rounded-xl border overflow-hidden transition-all duration-150 ${cardBg}`}
+      style={{ cursor: isClickable ? "pointer" : "default" }}
+      onClick={isClickable ? onToggle : undefined}
+    >
+      {/* Left accent bar — stretches with accordion */}
+      <div className={`${leftWidth} shrink-0`} style={{ backgroundColor: leftColor }} />
 
-      {/* Content */}
-      <div className="flex-1 px-3 py-2.5 min-w-0">
-        {/* Row 1: title + badge */}
-        <div className="flex items-start justify-between gap-2 mb-1">
-          <span className={`text-[14px] font-medium leading-snug ${completed || missed ? "line-through text-zinc-400" : "text-zinc-900"}`}>
-            {block.title}
-          </span>
-          {completed ? (
-            <span className="shrink-0 flex items-center gap-1 text-[10px] font-semibold text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
-              <CheckCircle2 className="w-3 h-3" /> Done
-            </span>
-          ) : isTask && !missed ? (
-            <PriorityBadge priority={block.priority} />
-          ) : null}
-        </div>
-
-        {/* Row 2: time range + duration + type */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="bg-zinc-100 text-zinc-500 rounded-full px-2 py-0.5 text-[11px] font-mono tabular-nums">
-            {fmtTimeRange(block.start_time, block.end_time)}
-          </span>
-          <span className="text-[11px] text-zinc-400">{fmtDuration(mins)}</span>
-          {!isTask && <span className="text-[11px] text-zinc-400">{label}</span>}
-        </div>
-
-        {/* Row 3: task actions */}
-        {isTask && !completed && !missed && (
-          <div className="flex items-center gap-1.5 mt-2">
-            <button onClick={() => handle("complete")} disabled={loading !== null}
-              className="flex items-center gap-1 text-[12px] font-semibold text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-40 border border-green-200 rounded-lg px-2.5 py-1 transition-colors">
-              {loading === "complete" ? "·" : "✓"} Complete
-            </button>
-            <button onClick={() => handle("skip")} disabled={loading !== null}
-              className="flex items-center gap-1 text-[12px] font-semibold text-zinc-500 bg-zinc-50 hover:bg-zinc-100 disabled:opacity-40 border border-zinc-200 rounded-lg px-2.5 py-1 transition-colors">
-              {loading === "skip" ? "·" : "⟳"} Skip
-            </button>
-            <button onClick={() => handle("miss")} disabled={loading !== null}
-              className="flex items-center gap-1 text-[12px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-40 border border-red-200 rounded-lg px-2.5 py-1 transition-colors">
-              {loading === "miss" ? "·" : "✗"} Miss
-            </button>
+      {/* Content column */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Main row: info + icon */}
+        <div className="flex items-center gap-2 px-3 py-2.5">
+          <div className="flex-1 min-w-0">
+            {/* Title + badge */}
+            <div className="flex items-start justify-between gap-2 mb-0.5">
+              <span className={`text-[14px] font-medium leading-snug ${completed || missed ? "line-through text-zinc-400" : "text-zinc-900"}`}>
+                {block.title}
+              </span>
+              {completed ? (
+                <span className="shrink-0 flex items-center gap-1 text-[10px] font-semibold text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                  <CheckCircle2 className="w-3 h-3" /> Done
+                </span>
+              ) : isTask && !missed ? (
+                <PriorityBadge priority={block.priority} />
+              ) : null}
+            </div>
+            {/* Time + duration + type */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="bg-zinc-100 text-zinc-500 rounded-full px-2 py-0.5 text-[11px] font-mono tabular-nums">
+                {fmtTimeRange(block.start_time, block.end_time)}
+              </span>
+              <span className="text-[11px] text-zinc-400">{fmtDuration(mins)}</span>
+              {!isTask && <span className="text-[11px] text-zinc-400">{label}</span>}
+            </div>
           </div>
-        )}
-      </div>
+          {/* Type icon */}
+          <Icon
+            className="w-4 h-4 shrink-0"
+            style={{
+              color: completed || missed ? "#a1a1aa" : accentColor,
+              opacity: completed ? 0.5 : 1,
+            }}
+          />
+        </div>
 
-      {/* Right: type icon */}
-      <div className="flex items-center px-3 shrink-0">
-        <Icon
-          className="w-4 h-4"
-          style={{ color: completed || missed ? "#a1a1aa" : accentColor, opacity: completed ? 0.5 : 1 }}
-        />
+        {/* Accordion panel */}
+        <div
+          className={`grid transition-all duration-200 ease-in-out ${
+            isExpanded && !completed && !missed ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          }`}
+        >
+          <div className="overflow-hidden">
+            <div
+              className="flex items-center gap-2 px-3 pb-3 pt-2 border-t border-zinc-100"
+              onClick={e => e.stopPropagation()}
+            >
+              {actions.map(a => (
+                <button
+                  key={`${a.id}-${a.label}`}
+                  onClick={() => onAction?.(block.id, block.task_id, a.id)}
+                  className={`flex items-center gap-1 text-[12px] font-semibold border rounded-lg px-2.5 py-1.5 transition-colors ${BTN[a.style]}`}
+                >
+                  <span>{a.icon}</span> {a.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

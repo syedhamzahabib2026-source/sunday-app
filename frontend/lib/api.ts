@@ -83,6 +83,16 @@ export interface ReorganizeResult {
   reorganization_log_id: number;
 }
 
+export interface RescheduleResult {
+  rescheduled: boolean;
+  reason?: string;
+  task_title?: string;
+  new_date?: string;
+  new_start_time?: string;
+  new_end_time?: string;
+  block_id?: number;
+}
+
 export interface GenerateResult {
   week_start: string;
   block_count: number;
@@ -125,6 +135,13 @@ export function reorganize(userId: number, reason = "manual"): Promise<Reorganiz
   return apiFetch("/schedule/reorganize", {
     method: "POST",
     body: JSON.stringify({ user_id: userId, reason }),
+  });
+}
+
+export function reorganizeMissed(userId: number, missedBlockId: number): Promise<RescheduleResult> {
+  return apiFetch("/schedule/reorganize", {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId, missed_block_id: missedBlockId, reason: "missed" }),
   });
 }
 

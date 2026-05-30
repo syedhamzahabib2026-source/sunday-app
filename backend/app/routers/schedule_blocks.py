@@ -117,12 +117,21 @@ def generate_schedule(
 class ReorganizeRequest(BaseModel):
     user_id: int
     reason: str = "manual"
+    missed_block_id: Optional[int] = None  # set to trigger missed-task rescheduler
 
 
 @router.post("/reorganize")
 def reorganize_schedule(
     payload: ReorganizeRequest, db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
+    # Missed-task fast rescheduler — find next free slot for one task
+    if payload.missed_block_id is not None:
+        from app.engines.scheduler import reorganize_missed_task
+        try:
+            return reorganize_missed_task(payload.user_id, payload.missed_block_id, db)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Reschedule failed: {e}")
+
     from app.engines.reorganizer import reorganize_schedule as _reorg
 
     result = _reorg(payload.user_id, db, payload.reason)

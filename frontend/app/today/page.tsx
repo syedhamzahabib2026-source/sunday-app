@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock, TrendingUp, Zap, Sun, Moon } from "lucide-react";
 import BlockCard from "@/components/BlockCard";
-import { getTodaySchedule, updateTaskStatus, reorganize, ScheduleBlock } from "@/lib/api";
+import { getTodaySchedule, updateTaskStatus, reorganize, reorganizeMissed, ScheduleBlock } from "@/lib/api";
 
 const USER_ID = 1;
 
@@ -85,6 +85,17 @@ function NowLine() {
   );
 }
 
+interface ToastMsg { id: number; message: string; type: "success" | "error"; }
+
+function rescheduleDay(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00");
+  const today = new Date(); today.setHours(12, 0, 0, 0);
+  const diff = Math.round((d.getTime() - today.getTime()) / 86400000);
+  if (diff === 0) return "today";
+  if (diff === 1) return "tomorrow";
+  return d.toLocaleDateString("en-US", { weekday: "long" });
+}
+
 const GROUP_META: Record<TimeGroup, { label: string; range: string; Icon: React.ComponentType<{ className?: string }>; iconClass: string }> = {
   morning:   { label: "Morning",   range: "before noon",  Icon: Sun,  iconClass: "text-amber-500" },
   afternoon: { label: "Afternoon", range: "12 – 5 PM",    Icon: Sun,  iconClass: "text-orange-400" },
@@ -96,6 +107,8 @@ export default function TodayPage() {
   const [blocks, setBlocks] = useState<ScheduleBlock[]>([]);
   const [completedIds, setCompletedIds] = useState<Set<number>>(new Set());
   const [missedIds,    setMissedIds]    = useState<Set<number>>(new Set());
+  const [expandedId,   setExpandedId]   = useState<number | null>(null);
+  const [toasts,       setToasts]       = useState<ToastMsg[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [overloaded, setOverloaded] = useState(false);
@@ -124,24 +137,60 @@ export default function TodayPage() {
     return () => observer.disconnect();
   }, [loading]);
 
-  async function handleComplete(blockId: number, taskId: number) {
-    await updateTaskStatus(taskId, "complete");
-    setCompletedIds(prev => new Set(prev).add(blockId));
-    const r = await reorganize(USER_ID, "task_complete");
-    setOverloaded(r.is_overloaded);
+  function showToast(message: string, type: "success" | "error" = "success") {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
   }
 
-  async function handleMiss(blockId: number, taskId: number) {
-    setMissedIds(prev => new Set(prev).add(blockId));
-    await updateTaskStatus(taskId, "missed");
-    const r = await reorganize(USER_ID, "task_missed");
-    setOverloaded(r.is_overloaded);
-    await load();
+  function toggleExpanded(blockId: number) {
+    setExpandedId(prev => prev === blockId ? null : blockId);
   }
 
-  async function handleSkip(_blockId: number, taskId: number) {
-    await updateTaskStatus(taskId, "cancelled");
-    await load();
+  async function handleAction(
+    blockId: number,
+    taskId: number | null,
+    action: "done" | "skip" | "miss",
+  ) {
+    setExpandedId(null);
+
+    if (taskId === null) {
+      // Non-task block — local state only
+      if (action === "done") setCompletedIds(prev => new Set(prev).add(blockId));
+      else if (action === "miss") setMissedIds(prev => new Set(prev).add(blockId));
+      // skip: just collapse
+      return;
+    }
+
+    // Task block
+    if (action === "done") {
+      await updateTaskStatus(taskId, "complete");
+      setCompletedIds(prev => new Set(prev).add(blockId));
+      const r = await reorganize(USER_ID, "task_complete");
+      setOverloaded(r.is_overloaded);
+    } else if (action === "skip") {
+      await updateTaskStatus(taskId, "cancelled");
+      await load();
+    } else if (action === "miss") {
+      setMissedIds(prev => new Set(prev).add(blockId));
+      await updateTaskStatus(taskId, "missed");
+      try {
+        const result = await reorganizeMissed(USER_ID, blockId);
+        if (result.rescheduled && result.new_date && result.new_start_time) {
+          showToast(
+            `${result.task_title} rescheduled to ${rescheduleDay(result.new_date)} at ${fmt12(result.new_start_time)}`
+          );
+        } else {
+          showToast(
+            `${result.task_title ?? "Task"} couldn't be rescheduled — no slot found this week`,
+            "error",
+          );
+        }
+      } catch {
+        showToast("Reschedule failed", "error");
+      }
+      await load();
+    }
   }
 
   const taskBlocks = blocks.filter(b => b.block_type === "task");
@@ -362,9 +411,9 @@ export default function TodayPage() {
                           )}
                           <BlockCard
                             block={block}
-                            onComplete={handleComplete}
-                            onMiss={handleMiss}
-                            onSkip={handleSkip}
+                            isExpanded={expandedId === block.id}
+                            onToggle={() => toggleExpanded(block.id)}
+                            onAction={handleAction}
                             completed={completedIds.has(block.id)}
                             missed={missedIds.has(block.id)}
                             isCurrent={isCurrentBlock(block)}
@@ -378,6 +427,28 @@ export default function TodayPage() {
             })}
           </div>
         </>
+      )}
+
+      {/* Toast notifications */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-6 right-4 sm:right-6 z-50 flex flex-col gap-2 max-w-xs w-full pointer-events-none">
+          {toasts.map(toast => (
+            <div
+              key={toast.id}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl shadow-xl text-white text-[13px] font-medium pointer-events-auto ${
+                toast.type === "success" ? "bg-indigo-600" : "bg-red-600"
+              }`}
+            >
+              <span className="flex-1 leading-snug">{toast.message}</span>
+              <button
+                onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+                className="shrink-0 text-white/70 hover:text-white text-[11px] font-semibold border border-white/30 rounded px-2 py-0.5"
+              >
+                Undo
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
