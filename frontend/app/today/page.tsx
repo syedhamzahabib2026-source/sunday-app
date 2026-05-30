@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock, TrendingUp, Zap, Sun, Moon } from "lucide-react";
 import BlockCard from "@/components/BlockCard";
 import { getTodaySchedule, updateTaskStatus, reorganize, ScheduleBlock } from "@/lib/api";
@@ -66,6 +66,25 @@ function getGroup(t: string): TimeGroup {
   return "evening";
 }
 
+function gapMins(prev: ScheduleBlock, next: ScheduleBlock): number {
+  const [ph, pm] = prev.end_time.split(":").map(Number);
+  const [nh, nm] = next.start_time.split(":").map(Number);
+  let endM = ph * 60 + pm;
+  if (endM === 0) endM = 1440;
+  return Math.max(0, nh * 60 + nm - endM);
+}
+
+function NowLine() {
+  return (
+    <div className="flex items-center gap-2 my-1 px-0.5">
+      <div className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
+      <div className="flex-1 h-px bg-red-300" />
+      <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider">Now</span>
+      <div className="flex-1 h-px bg-red-300" />
+    </div>
+  );
+}
+
 const GROUP_META: Record<TimeGroup, { label: string; range: string; Icon: React.ComponentType<{ className?: string }>; iconClass: string }> = {
   morning:   { label: "Morning",   range: "before noon",  Icon: Sun,  iconClass: "text-amber-500" },
   afternoon: { label: "Afternoon", range: "12 – 5 PM",    Icon: Sun,  iconClass: "text-orange-400" },
@@ -76,6 +95,7 @@ export default function TodayPage() {
   const [todayStr] = useState(() => toLocalDateString(new Date()));
   const [blocks, setBlocks] = useState<ScheduleBlock[]>([]);
   const [completedIds, setCompletedIds] = useState<Set<number>>(new Set());
+  const [missedIds,    setMissedIds]    = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [overloaded, setOverloaded] = useState(false);
@@ -111,7 +131,8 @@ export default function TodayPage() {
     setOverloaded(r.is_overloaded);
   }
 
-  async function handleMiss(_blockId: number, taskId: number) {
+  async function handleMiss(blockId: number, taskId: number) {
+    setMissedIds(prev => new Set(prev).add(blockId));
     await updateTaskStatus(taskId, "missed");
     const r = await reorganize(USER_ID, "task_missed");
     setOverloaded(r.is_overloaded);
@@ -135,6 +156,24 @@ export default function TodayPage() {
     (acc, b) => { acc[getGroup(b.start_time)].push(b); return acc; },
     { morning: [], afternoon: [], evening: [] }
   );
+
+  // NOW indicator — find first block that starts strictly after current time
+  const nowMins = new Date().getHours() * 60 + new Date().getMinutes();
+  const nowIndicatorBeforeId = (() => {
+    for (const b of blocks) {
+      const [h, m] = b.start_time.split(":").map(Number);
+      if (h * 60 + m > nowMins) return b.id;
+    }
+    return null;
+  })();
+
+  function isCurrentBlock(b: ScheduleBlock): boolean {
+    const [sh, sm] = b.start_time.split(":").map(Number);
+    const [eh, em] = b.end_time.split(":").map(Number);
+    const startM = sh * 60 + sm;
+    const endM = (eh === 0 && em === 0) ? 1440 : eh * 60 + em;
+    return nowMins >= startM && nowMins < endM;
+  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-8 pb-20 page-fade">
@@ -279,28 +318,60 @@ export default function TodayPage() {
               const groupBlocks = grouped[key];
               if (groupBlocks.length === 0) return null;
               const { label, range, Icon, iconClass } = GROUP_META[key];
+              const doneInGroup = groupBlocks.filter(b => completedIds.has(b.id)).length;
+              const groupPct = doneInGroup / groupBlocks.length;
+
               return (
                 <div key={key}>
-                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-zinc-100">
-                    <Icon className={`w-3.5 h-3.5 ${iconClass}`} />
-                    <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">{label}</h2>
-                    <span className="text-[11px] text-zinc-300">·</span>
-                    <span className="text-[11px] text-zinc-400">{range}</span>
-                    <span className="ml-auto text-[11px] font-semibold text-zinc-400 bg-zinc-100 rounded-full px-2 py-0.5">
-                      {groupBlocks.length} block{groupBlocks.length !== 1 ? "s" : ""}
-                    </span>
+                  {/* Sticky section header */}
+                  <div className="sticky top-14 z-10 bg-white/95 backdrop-blur-sm -mx-1 px-1 mb-3">
+                    <div className="flex items-center gap-2 py-2 border-b border-zinc-100">
+                      <Icon className={`w-3.5 h-3.5 ${iconClass}`} />
+                      <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">{label}</h2>
+                      <span className="text-[11px] text-zinc-300">·</span>
+                      <span className="text-[11px] text-zinc-400">{range}</span>
+                      <span className="ml-auto text-[11px] font-semibold text-zinc-400 bg-zinc-100 rounded-full px-2 py-0.5">
+                        {groupBlocks.length} block{groupBlocks.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    {doneInGroup > 0 && (
+                      <div className="h-0.5 bg-zinc-100 rounded-full overflow-hidden mt-0.5">
+                        <div
+                          className="h-full bg-green-400 rounded-full transition-all duration-500"
+                          style={{ width: `${groupPct * 100}%` }}
+                        />
+                      </div>
+                    )}
                   </div>
+
+                  {/* Block list with NOW line + gap indicators */}
                   <div className="space-y-2">
-                    {groupBlocks.map((block) => (
-                      <BlockCard
-                        key={block.id}
-                        block={block}
-                        onComplete={handleComplete}
-                        onMiss={handleMiss}
-                        onSkip={handleSkip}
-                        completed={completedIds.has(block.id)}
-                      />
-                    ))}
+                    {groupBlocks.map((block, i) => {
+                      const prev = groupBlocks[i - 1];
+                      const gap = prev ? gapMins(prev, block) : 0;
+                      const showNow = block.id === nowIndicatorBeforeId;
+                      return (
+                        <Fragment key={block.id}>
+                          {showNow && <NowLine />}
+                          {!showNow && gap > 15 && (
+                            <div className="flex items-center gap-2 py-0.5">
+                              <div className="flex-1 h-px bg-zinc-100" />
+                              <span className="text-[10px] text-zinc-300 font-medium">{gap} min gap</span>
+                              <div className="flex-1 h-px bg-zinc-100" />
+                            </div>
+                          )}
+                          <BlockCard
+                            block={block}
+                            onComplete={handleComplete}
+                            onMiss={handleMiss}
+                            onSkip={handleSkip}
+                            completed={completedIds.has(block.id)}
+                            missed={missedIds.has(block.id)}
+                            isCurrent={isCurrentBlock(block)}
+                          />
+                        </Fragment>
+                      );
+                    })}
                   </div>
                 </div>
               );

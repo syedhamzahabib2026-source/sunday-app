@@ -231,7 +231,7 @@ def generate_weekly_schedule(
     prefs: Optional[WeeklyPreferences] = (
         db.query(WeeklyPreferences)
         .filter(WeeklyPreferences.user_id == user_id)
-        .order_by(WeeklyPreferences.week_start_date.desc())
+        .order_by(WeeklyPreferences.week_start_date.desc(), WeeklyPreferences.id.desc())
         .first()
     )
 
