@@ -77,6 +77,21 @@ def lock_block(block_id: int, db: Session = Depends(get_db)):
     return block
 
 
+class BlockStatusUpdate(BaseModel):
+    status: str  # complete / missed / skipped
+
+
+@router.patch("/block/{block_id}/status", response_model=ScheduleBlockResponse)
+def update_block_status(block_id: int, payload: BlockStatusUpdate, db: Session = Depends(get_db)):
+    block = db.query(ScheduleBlock).filter(ScheduleBlock.id == block_id).first()
+    if not block:
+        raise HTTPException(status_code=404, detail="Schedule block not found")
+    block.status = payload.status
+    db.commit()
+    db.refresh(block)
+    return block
+
+
 # ── Schedule generation ───────────────────────────────────────────────────────
 
 class GenerateScheduleRequest(BaseModel):

@@ -28,6 +28,8 @@ class ScheduleBlockResponse(BaseModel):
     date: date
     is_locked: bool
     priority: Optional[str]
+    status: Optional[str] = None
+    is_rescheduled: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}

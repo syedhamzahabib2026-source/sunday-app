@@ -138,11 +138,12 @@ interface Props {
   completed?: boolean;
   missed?: boolean;
   isCurrent?: boolean;
+  rescheduled?: boolean;
 }
 
 export default function BlockCard({
   block, isExpanded, onToggle, onAction,
-  completed, missed, isCurrent,
+  completed, missed, isCurrent, rescheduled,
 }: Props) {
   const isTask     = block.block_type === "task" && block.task_id != null;
   const mins       = durationMins(block);
@@ -155,11 +156,16 @@ export default function BlockCard({
   const cardBg =
     missed      ? "bg-red-50/40 border-red-200" :
     completed   ? "bg-zinc-50 border-zinc-200 opacity-70" :
+    rescheduled ? "bg-amber-50/30 border-amber-200 hover:shadow-md" :
     isExpanded  ? "bg-white border-indigo-300 ring-2 ring-indigo-100" :
     isCurrent   ? "bg-indigo-50/50 border-indigo-200" :
                   "bg-white border-zinc-200 shadow-sm hover:shadow-md hover:border-zinc-300";
 
-  const leftColor  = missed ? "#dc2626" : (isCurrent || isExpanded) ? "#6366f1" : accentColor;
+  const leftColor =
+    missed      ? "#dc2626" :
+    rescheduled ? "#d97706" :
+    (isCurrent || isExpanded) ? "#6366f1" :
+    accentColor;
   const leftWidth  = isCurrent || isExpanded ? "w-1.5" : "w-1";
 
   return (
@@ -189,6 +195,15 @@ export default function BlockCard({
                 <PriorityBadge priority={block.priority} />
               ) : null}
             </div>
+            {/* Rescheduled badge */}
+            {rescheduled && !completed && !missed && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 mb-1"
+                title="This task was missed and moved here by Sunday"
+              >
+                ↻ Rescheduled
+              </span>
+            )}
             {/* Time + duration + type */}
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="bg-zinc-100 text-zinc-500 rounded-full px-2 py-0.5 text-[11px] font-mono tabular-nums">

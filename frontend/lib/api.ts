@@ -22,6 +22,8 @@ export interface ScheduleBlock {
   date: string;       // "YYYY-MM-DD"
   is_locked: boolean;
   priority: string | null;
+  status: string | null;          // complete / missed / skipped / null
+  is_rescheduled: boolean;
   created_at: string;
 }
 
@@ -126,6 +128,13 @@ export function getWeekSchedule(userId: number, weekStart: string): Promise<Sche
 
 export function updateTaskStatus(taskId: number, status: string): Promise<Task> {
   return apiFetch(`/tasks/${taskId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function updateBlockStatus(blockId: number, status: string): Promise<ScheduleBlock> {
+  return apiFetch(`/schedule/block/${blockId}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
   });

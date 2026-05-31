@@ -19,5 +19,7 @@ class ScheduleBlock(Base):
     date = Column(Date, nullable=False)
     is_locked = Column(Boolean, nullable=False, default=False)
     priority = Column(String, nullable=True)
+    status = Column(String, nullable=True)          # complete / missed / skipped / None
+    is_rescheduled = Column(Boolean, nullable=False, default=False)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

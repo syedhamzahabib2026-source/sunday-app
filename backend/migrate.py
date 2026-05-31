@@ -56,6 +56,8 @@ def run_migrations() -> None:
     _add_column_if_missing("tasks",               "fixed_end_time",    "VARCHAR")
     _add_column_if_missing("tasks",               "commute_minutes",   "INTEGER DEFAULT 0")
     _add_column_if_missing("weekly_preferences",  "scheduling_notes",  "TEXT")
+    _add_column_if_missing("schedule_blocks",     "status",            "VARCHAR")
+    _add_column_if_missing("schedule_blocks",     "is_rescheduled",    "BOOLEAN DEFAULT FALSE")
 
     print("  [migrate] all migrations applied")
 

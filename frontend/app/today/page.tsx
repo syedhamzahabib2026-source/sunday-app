@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock, TrendingUp, Zap, Sun, Moon } from "lucide-react";
 import BlockCard from "@/components/BlockCard";
-import { getTodaySchedule, updateTaskStatus, reorganize, reorganizeMissed, ScheduleBlock } from "@/lib/api";
+import { getTodaySchedule, updateTaskStatus, updateBlockStatus, reorganize, reorganizeMissed, ScheduleBlock } from "@/lib/api";
 
 const USER_ID = 1;
 
@@ -119,8 +119,21 @@ export default function TodayPage() {
     setLoading(true);
     setError(null);
     try {
-      setBlocks(await getTodaySchedule(USER_ID, todayStr));
-    } catch (e) { setError(String(e)); }
+      const data = await getTodaySchedule(USER_ID, todayStr);
+      setBlocks(data);
+      // Initialise visual state from persisted block.status
+      const completed = new Set<number>();
+      const missed    = new Set<number>();
+      for (const b of data) {
+        if (b.status === "complete" || b.status === "skipped") completed.add(b.id);
+        else if (b.status === "missed") missed.add(b.id);
+      }
+      setCompletedIds(completed);
+      setMissedIds(missed);
+    } catch (e) {
+      console.error("[Sunday] Failed to load schedule:", e);
+      setError(String(e));
+    }
     finally { setLoading(false); }
   }, [todayStr]);
 
@@ -155,24 +168,36 @@ export default function TodayPage() {
     setExpandedId(null);
 
     if (taskId === null) {
-      // Non-task block — local state only
-      if (action === "done") setCompletedIds(prev => new Set(prev).add(blockId));
+      // Non-task block — persist status on the block, update local state
+      const blockStatus = action === "done" ? "complete" : action === "miss" ? "missed" : "skipped";
+      updateBlockStatus(blockId, blockStatus).catch(e =>
+        console.error("[Sunday] Block status update failed:", e)
+      );
+      if (action === "done" || action === "skip") setCompletedIds(prev => new Set(prev).add(blockId));
       else if (action === "miss") setMissedIds(prev => new Set(prev).add(blockId));
-      // skip: just collapse
       return;
     }
 
-    // Task block
+    // Task block — persist status on block AND task
     if (action === "done") {
+      updateBlockStatus(blockId, "complete").catch(e =>
+        console.error("[Sunday] Block status update failed:", e)
+      );
       await updateTaskStatus(taskId, "complete");
       setCompletedIds(prev => new Set(prev).add(blockId));
       const r = await reorganize(USER_ID, "task_complete");
       setOverloaded(r.is_overloaded);
     } else if (action === "skip") {
+      updateBlockStatus(blockId, "skipped").catch(e =>
+        console.error("[Sunday] Block status update failed:", e)
+      );
       await updateTaskStatus(taskId, "cancelled");
       await load();
     } else if (action === "miss") {
       setMissedIds(prev => new Set(prev).add(blockId));
+      updateBlockStatus(blockId, "missed").catch(e =>
+        console.error("[Sunday] Block status update failed:", e)
+      );
       await updateTaskStatus(taskId, "missed");
       try {
         const result = await reorganizeMissed(USER_ID, blockId);
@@ -417,6 +442,7 @@ export default function TodayPage() {
                             completed={completedIds.has(block.id)}
                             missed={missedIds.has(block.id)}
                             isCurrent={isCurrentBlock(block)}
+                            rescheduled={block.is_rescheduled === true}
                           />
                         </Fragment>
                       );

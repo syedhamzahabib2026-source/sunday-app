@@ -673,15 +673,16 @@ def reorganize_missed_task(
         if slot is not None:
             new_date = today + timedelta(days=d_offset)
             new_block = ScheduleBlock(
-                user_id   = user_id,
-                task_id   = task.id,
-                block_type= "task",
-                title     = task.title,
-                start_time= slot_to_time(slot),
-                end_time  = slot_to_time(slot + task_slots),
-                date      = new_date,
-                is_locked = False,
-                priority  = task.priority,
+                user_id       = user_id,
+                task_id       = task.id,
+                block_type    = "task",
+                title         = task.title,
+                start_time    = slot_to_time(slot),
+                end_time      = slot_to_time(slot + task_slots),
+                date          = new_date,
+                is_locked     = False,
+                priority      = task.priority,
+                is_rescheduled= True,
             )
             db.add(new_block)
             db.commit()
