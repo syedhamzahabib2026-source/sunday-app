@@ -102,8 +102,30 @@ const GROUP_META: Record<TimeGroup, { label: string; range: string; Icon: React.
   evening:   { label: "Evening",   range: "after 5 PM",   Icon: Moon, iconClass: "text-indigo-500" },
 };
 
+const actualTodayStr = toLocalDateString(new Date());
+
+function getDayLabel(viewing: string, actual: string): string {
+  const diff = Math.round(
+    (new Date(viewing + "T12:00:00").getTime() - new Date(actual + "T12:00:00").getTime()) / 86400000
+  );
+  if (diff === 0) return "Today";
+  if (diff === -1) return "Yesterday";
+  if (diff === 1) return "Tomorrow";
+  return new Date(viewing + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+}
+
 export default function TodayPage() {
-  const [todayStr] = useState(() => toLocalDateString(new Date()));
+  // Read date from URL ?date= param if present, else show today
+  const [viewingDateStr, setViewingDateStr] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search).get("date");
+      if (p && /^\d{4}-\d{2}-\d{2}$/.test(p)) return p;
+    }
+    return actualTodayStr;
+  });
+
+  const isViewingToday = viewingDateStr === actualTodayStr;
+
   const [blocks, setBlocks] = useState<ScheduleBlock[]>([]);
   const [completedIds, setCompletedIds] = useState<Set<number>>(new Set());
   const [missedIds,    setMissedIds]    = useState<Set<number>>(new Set());
@@ -119,9 +141,8 @@ export default function TodayPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await getTodaySchedule(USER_ID, todayStr);
+      const data = await getTodaySchedule(USER_ID, viewingDateStr);
       setBlocks(data);
-      // Initialise visual state from persisted block.status
       const completed = new Set<number>();
       const missed    = new Set<number>();
       for (const b of data) {
@@ -135,7 +156,20 @@ export default function TodayPage() {
       setError(String(e));
     }
     finally { setLoading(false); }
-  }, [todayStr]);
+  }, [viewingDateStr]);
+
+  function navigate(direction: -1 | 1) {
+    const d = new Date(viewingDateStr + "T12:00:00");
+    d.setDate(d.getDate() + direction);
+    const newDate = toLocalDateString(d);
+    setViewingDateStr(newDate);
+    window.history.pushState({}, "", newDate === actualTodayStr ? "/today" : `/today?date=${newDate}`);
+  }
+
+  function goToToday() {
+    setViewingDateStr(actualTodayStr);
+    window.history.pushState({}, "", "/today");
+  }
 
   useEffect(() => { load(); }, [load]);
 
@@ -223,25 +257,26 @@ export default function TodayPage() {
   const totalMins = blocks.reduce((s, b) => s + blockMins(b), 0);
   const hoursScheduled = Math.round(totalMins / 60 * 10) / 10;
   const completionRate = taskBlocks.length === 0 ? 0 : Math.round((completedCount / taskBlocks.length) * 100);
-  const nextBlock = getNextBlock(blocks);
-  const weekNum = getWeekNumber(new Date(todayStr + "T12:00:00"));
+  const nextBlock = isViewingToday ? getNextBlock(blocks) : null;
+  const weekNum = getWeekNumber(new Date(viewingDateStr + "T12:00:00"));
 
   const grouped = blocks.reduce<Record<TimeGroup, ScheduleBlock[]>>(
     (acc, b) => { acc[getGroup(b.start_time)].push(b); return acc; },
     { morning: [], afternoon: [], evening: [] }
   );
 
-  // NOW indicator — find first block that starts strictly after current time
+  // NOW indicator — only relevant when viewing today
   const nowMins = new Date().getHours() * 60 + new Date().getMinutes();
-  const nowIndicatorBeforeId = (() => {
+  const nowIndicatorBeforeId = isViewingToday ? (() => {
     for (const b of blocks) {
       const [h, m] = b.start_time.split(":").map(Number);
       if (h * 60 + m > nowMins) return b.id;
     }
     return null;
-  })();
+  })() : null;
 
   function isCurrentBlock(b: ScheduleBlock): boolean {
+    if (!isViewingToday) return false;
     const [sh, sm] = b.start_time.split(":").map(Number);
     const [eh, em] = b.end_time.split(":").map(Number);
     const startM = sh * 60 + sm;
@@ -274,16 +309,42 @@ export default function TodayPage() {
 
       {/* Header */}
       <div className="mb-7">
-        <div className="flex items-center gap-2 mb-1.5">
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Today</p>
-          <span className="bg-zinc-100 text-zinc-500 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
-            Week {weekNum}
-          </span>
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
+              {getDayLabel(viewingDateStr, actualTodayStr)}
+            </p>
+            <span className="bg-zinc-100 text-zinc-500 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
+              Week {weekNum}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {!isViewingToday && (
+              <button
+                onClick={goToToday}
+                className="text-[11px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-full px-3 py-1 hover:bg-indigo-100 transition-colors"
+              >
+                Back to today
+              </button>
+            )}
+            <button
+              onClick={() => navigate(-1)}
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-[16px]"
+            >
+              ←
+            </button>
+            <button
+              onClick={() => navigate(1)}
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-[16px]"
+            >
+              →
+            </button>
+          </div>
         </div>
         <h1 className="text-[28px] sm:text-[32px] font-semibold text-zinc-900 leading-tight mb-0.5">
-          {formatDateLong(new Date(todayStr + "T12:00:00"))}
+          {formatDateLong(new Date(viewingDateStr + "T12:00:00"))}
         </h1>
-        <p className="text-[14px] text-zinc-400">{formatWeekRange(new Date(todayStr + "T12:00:00"))}</p>
+        <p className="text-[14px] text-zinc-400">{formatWeekRange(new Date(viewingDateStr + "T12:00:00"))}</p>
       </div>
 
       {error && (
@@ -310,7 +371,7 @@ export default function TodayPage() {
       {!loading && !error && blocks.length === 0 && (
         <div className="py-24 text-center">
           <div className="w-16 h-16 rounded-2xl bg-zinc-100 flex items-center justify-center text-3xl mx-auto mb-5">📅</div>
-          <p className="text-[17px] font-semibold text-zinc-900 mb-2">No schedule for today</p>
+          <p className="text-[17px] font-semibold text-zinc-900 mb-2">No schedule for {getDayLabel(viewingDateStr, actualTodayStr).toLowerCase()}</p>
           <p className="text-[14px] text-zinc-400 mb-7">Run your Sunday setup to generate this week.</p>
           <a href="/setup" className="inline-flex items-center gap-2 bg-indigo-600 text-white text-[14px] font-semibold px-5 py-2.5 rounded-xl hover:bg-indigo-700 transition-colors">
             Run Sunday setup →

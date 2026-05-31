@@ -36,17 +36,21 @@ interface Props {
   date: string;
   blocks: ScheduleBlock[];
   isToday: boolean;
+  onClick?: () => void;
 }
 
-export default function DayColumn({ day, blocks, isToday }: Props) {
+export default function DayColumn({ day, blocks, isToday, onClick }: Props) {
   const [dayName, dayNum] = day.split(" ");
   const visible = blocks.slice(0, MAX_VISIBLE);
   const overflow = blocks.length - MAX_VISIBLE;
 
   return (
-    <div className="flex flex-col min-w-0 min-h-[160px]">
+    <div
+      className={`flex flex-col min-w-0 min-h-[160px] ${onClick ? "cursor-pointer" : ""}`}
+      onClick={onClick}
+    >
       {/* Header */}
-      <div className={`text-center py-2.5 border-b border-zinc-200 ${isToday ? "bg-indigo-50" : "bg-white"}`}>
+      <div className={`text-center py-2.5 border-b border-zinc-200 transition-colors ${isToday ? "bg-indigo-50" : onClick ? "hover:bg-zinc-50 bg-white" : "bg-white"}`}>
         <div className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1">{dayName}</div>
         <div
           className={`text-[15px] font-bold leading-none mx-auto w-7 h-7 flex items-center justify-center rounded-full ${
@@ -58,7 +62,7 @@ export default function DayColumn({ day, blocks, isToday }: Props) {
       </div>
 
       {/* Blocks */}
-      <div className={`flex-1 p-1.5 space-y-1 ${isToday ? "bg-indigo-50/20" : "bg-white"}`}>
+      <div className={`flex-1 p-1.5 space-y-1 transition-colors ${isToday ? "bg-indigo-50/20" : onClick ? "hover:bg-zinc-50/50 bg-white" : "bg-white"}`}>
         {blocks.length === 0 ? (
           <div className="h-full min-h-[80px] border border-dashed border-zinc-200 rounded-lg flex items-center justify-center">
             <span className="text-[10px] text-zinc-300">—</span>
@@ -82,7 +86,9 @@ export default function DayColumn({ day, blocks, isToday }: Props) {
               </div>
             ))}
             {overflow > 0 && (
-              <p className="text-[9px] text-zinc-400 px-1.5 pb-0.5">+{overflow} more</p>
+              <p className="text-[9px] text-indigo-500 font-medium px-1.5 pb-0.5 hover:text-indigo-700">
+                View all →
+              </p>
             )}
           </>
         )}

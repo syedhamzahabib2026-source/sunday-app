@@ -658,3 +658,49 @@ Loads `.env` locally and runs the same `run_migrations()`. Safe to run at any ti
 - **AI mode scheduling** — let Claude decide bedtime, wake time, and workout slots based on user goals rather than explicit preferences
 - **Partial completion tracking** — mark a task as half-done, have the reorganizer split the remaining time into a new block
 - **Cheaper model routing** — use Haiku for duration extraction and date parsing, reserve Sonnet for full intent parsing
+
+---
+
+## Reorganization Engine — Full Logic
+
+**File:** `backend/app/engines/scheduler.py` — `reorganize_missed_task()`
+
+When a task is marked as Missed, Sunday runs the full rescheduler:
+
+### Priority rules
+
+| Priority | Behavior |
+|---|---|
+| `optional` | Always dropped — never rescheduled |
+| `low` | Reschedule only if a free slot exists today or tomorrow |
+| `medium` | Reschedule within the week, same time-of-day preferred |
+| `high` | Reschedule ASAP, any available slot |
+| `critical` | Reschedule ASAP; if no slot found → `needs_attention` flag |
+
+### Slot scoring (lower = better)
+
+| Condition | Score delta |
+|---|---|
+| Today | 0 |
+| Tomorrow | +1 |
+| Day after tomorrow | +2 |
+| Each additional day | +day_offset |
+| Late-night slot (after 10 PM) | +2 |
+| Adjacent to a meal time (±30 min of 8am/12:30pm/7pm) | +1 |
+| Matches original time-of-day period (morning/afternoon/evening) | −1 |
+| Past deadline | Slot disqualified entirely |
+
+### Drop conditions
+
+- Deadline already passed at time of marking
+- Priority is `optional`
+- Priority is `low` and no slot found today or tomorrow
+- Priority is `medium` and no slot found before deadline/week-end
+- No slot found before deadline (medium and below)
+
+### `needs_attention` flag
+
+When `critical` or `high` priority tasks have no available slot:
+- `reorganize_missed_task()` returns `{rescheduled: false, reason: "needs_attention"}`
+- Frontend shows a red toast: "[Task name] — no slot found! Needs your attention."
+- No block is created; user must manually reorganize or extend the deadline

@@ -2,9 +2,12 @@
 
 import { useEffect, useState } from "react";
 import DayColumn from "@/components/DayColumn";
+import BlockCard from "@/components/BlockCard";
 import {
   getWeekSchedule, getArchivedSchedules, getArchivedWeekBlocks,
-  deleteArchivedSchedule, ScheduleBlock, ScheduleRecord,
+  deleteArchivedSchedule, getTodaySchedule,
+  updateBlockStatus, updateTaskStatus, reorganize, reorganizeMissed,
+  ScheduleBlock, ScheduleRecord,
 } from "@/lib/api";
 
 const USER_ID = 1;
@@ -39,6 +42,10 @@ function blockMins(b: ScheduleBlock): number {
   return Math.max(0, raw < 0 ? raw + 1440 : raw);
 }
 
+function fmtDayFull(dateStr: string): string {
+  return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
 export default function WeekPage() {
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()));
   const [blocks, setBlocks] = useState<ScheduleBlock[]>([]);
@@ -49,6 +56,14 @@ export default function WeekPage() {
   const [archiveBlocks, setArchiveBlocks] = useState<ScheduleBlock[]>([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+
+  // Day drawer
+  const [drawerDate, setDrawerDate] = useState<string | null>(null);
+  const [drawerBlocks, setDrawerBlocks] = useState<ScheduleBlock[]>([]);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const [drawerCompletedIds, setDrawerCompletedIds] = useState<Set<number>>(new Set());
+  const [drawerMissedIds,    setDrawerMissedIds]    = useState<Set<number>>(new Set());
+  const [drawerExpandedId,   setDrawerExpandedId]   = useState<number | null>(null);
 
   const todayStr = toLocalDateString(new Date());
 
@@ -79,6 +94,51 @@ export default function WeekPage() {
       if (viewingArchive?.id === id) setViewingArchive(null);
       setConfirmDelete(null);
     }).catch(() => setConfirmDelete(null));
+  }
+
+  function openDrawer(dateStr: string) {
+    setDrawerDate(dateStr);
+    setDrawerExpandedId(null);
+    setDrawerLoading(true);
+    getTodaySchedule(1, dateStr).then(data => {
+      setDrawerBlocks(data);
+      const completed = new Set<number>();
+      const missed    = new Set<number>();
+      for (const b of data) {
+        if (b.status === "complete" || b.status === "skipped") completed.add(b.id);
+        else if (b.status === "missed") missed.add(b.id);
+      }
+      setDrawerCompletedIds(completed);
+      setDrawerMissedIds(missed);
+      setDrawerLoading(false);
+    }).catch(() => setDrawerLoading(false));
+  }
+
+  async function handleDrawerAction(blockId: number, taskId: number | null, action: "done" | "skip" | "miss") {
+    setDrawerExpandedId(null);
+    const blockStatus = action === "done" ? "complete" : action === "miss" ? "missed" : "skipped";
+    updateBlockStatus(blockId, blockStatus).catch(() => {});
+
+    if (taskId === null) {
+      if (action === "done" || action === "skip") setDrawerCompletedIds(p => new Set(p).add(blockId));
+      else setDrawerMissedIds(p => new Set(p).add(blockId));
+      return;
+    }
+    if (action === "done") {
+      await updateTaskStatus(taskId, "complete");
+      setDrawerCompletedIds(p => new Set(p).add(blockId));
+      await reorganize(1, "task_complete");
+    } else if (action === "skip") {
+      await updateTaskStatus(taskId, "cancelled");
+    } else if (action === "miss") {
+      setDrawerMissedIds(p => new Set(p).add(blockId));
+      await updateTaskStatus(taskId, "missed");
+      await reorganizeMissed(1, blockId);
+    }
+    // Reload drawer + week
+    if (drawerDate) openDrawer(drawerDate);
+    const ws = toLocalDateString(weekStart);
+    getWeekSchedule(1, ws).then(setBlocks).catch(() => {});
   }
 
   const blocksByDay: Record<string, ScheduleBlock[]> = {};
@@ -187,6 +247,7 @@ export default function WeekPage() {
                       date={dateStr}
                       blocks={blocksByDay[dateStr] ?? []}
                       isToday={dateStr === todayStr}
+                      onClick={() => openDrawer(dateStr)}
                     />
                   </div>
                 );
@@ -194,6 +255,53 @@ export default function WeekPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Day drawer */}
+      {drawerDate !== null && (
+        <>
+          <div
+            className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px]"
+            onClick={() => setDrawerDate(null)}
+          />
+          <div className="fixed right-0 top-0 bottom-0 z-40 w-[380px] bg-white border-l border-zinc-200 shadow-xl flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 shrink-0">
+              <div>
+                <p className="text-[15px] font-semibold text-zinc-900">{fmtDayFull(drawerDate)}</p>
+                <p className="text-[11px] text-zinc-400 mt-0.5">{drawerBlocks.length} blocks</p>
+              </div>
+              <button
+                onClick={() => setDrawerDate(null)}
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-xl"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
+              {drawerLoading ? (
+                <div className="flex items-center gap-2 py-12 justify-center text-zinc-400 text-[13px]">
+                  <div className="w-4 h-4 border-2 border-zinc-200 border-t-indigo-600 rounded-full animate-spin" />
+                  Loading...
+                </div>
+              ) : drawerBlocks.length === 0 ? (
+                <p className="text-center text-[13px] text-zinc-400 py-12">No blocks scheduled</p>
+              ) : (
+                drawerBlocks.map(block => (
+                  <BlockCard
+                    key={block.id}
+                    block={block}
+                    isExpanded={drawerExpandedId === block.id}
+                    onToggle={() => setDrawerExpandedId(p => p === block.id ? null : block.id)}
+                    onAction={handleDrawerAction}
+                    completed={drawerCompletedIds.has(block.id)}
+                    missed={drawerMissedIds.has(block.id)}
+                    rescheduled={block.is_rescheduled === true}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        </>
       )}
 
       {/* Archived weeks */}

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { savePreferences, generateSchedule, createTask } from "@/lib/api";
+import Toggle from "@/components/Toggle";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,11 @@ interface WizardData {
   fixed_commitments: FixedCommitment[];
   tasks: WizardTask[];
   extra_context: string;
+  // AI mode quick-prefs
+  ai_meals_per_day: number;
+  ai_meal_duration_mins: number;
+  ai_has_commute: boolean;
+  ai_commute_mins: number;
 }
 
 interface DraftState {
@@ -168,6 +174,10 @@ const DEFAULTS: WizardData = {
   fixed_commitments: [],
   tasks: [],
   extra_context: "",
+  ai_meals_per_day: 3,
+  ai_meal_duration_mins: 20,
+  ai_has_commute: false,
+  ai_commute_mins: 30,
 };
 
 // ─── UI Primitives ────────────────────────────────────────────────────────────
@@ -1008,13 +1018,7 @@ function DraftTaskForm({ onAdd, onCancel, mode }: {
               <span className="text-[15px]">🚗</span>
               <p className="text-[14px] font-medium text-gray-700">Does this require travel?</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setHasCommute(v => !v)}
-              className={`relative w-10 h-6 rounded-full transition-colors ${hasCommute ? "bg-indigo-600" : "bg-gray-200"}`}
-            >
-              <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${hasCommute ? "translate-x-5" : "translate-x-1"}`} />
-            </button>
+            <Toggle checked={hasCommute} onChange={setHasCommute} />
           </div>
           {hasCommute && (
             <div className="mt-3 fade-in">
@@ -1045,6 +1049,92 @@ function DraftTaskForm({ onAdd, onCancel, mode }: {
   );
 }
 
+// ─── AI QUICK PREFS ───────────────────────────────────────────────────────────
+
+function AIQuickPrefs({ data, set }: {
+  data: WizardData;
+  set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void;
+}) {
+  return (
+    <div className="mb-8 bg-indigo-50/40 border border-indigo-100 rounded-2xl p-5 space-y-5">
+      <p className="text-[13px] font-semibold text-indigo-700 uppercase tracking-widest">Quick preferences</p>
+
+      {/* Meals per day */}
+      <div>
+        <p className="text-[14px] font-medium text-gray-700 mb-2">How many meals do you eat per day?</p>
+        <div className="flex gap-2">
+          {[2, 3, 4].map(n => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => set("ai_meals_per_day", n)}
+              className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
+                data.ai_meals_per_day === n
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+              }`}
+            >
+              {n === 4 ? "4+" : n} meals
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Meal duration */}
+      <div>
+        <p className="text-[14px] font-medium text-gray-700 mb-2">How long does each meal take?</p>
+        <div className="flex gap-2 flex-wrap">
+          {[15, 20, 30, 45].map(m => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => set("ai_meal_duration_mins", m)}
+              className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
+                data.ai_meal_duration_mins === m
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+              }`}
+            >
+              {m} min
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Commute */}
+      <div>
+        <div className="flex items-center justify-between">
+          <p className="text-[14px] font-medium text-gray-700">Do you have a commute?</p>
+          <Toggle checked={data.ai_has_commute} onChange={v => set("ai_has_commute", v)} />
+        </div>
+        {data.ai_has_commute && (
+          <div className="mt-3 fade-in">
+            <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-2">One-way duration</p>
+            <div className="flex gap-2">
+              {[15, 30, 45, 60].map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => set("ai_commute_mins", m)}
+                  className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
+                    data.ai_commute_mins === m
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                  }`}
+                >
+                  {m} min
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── TASKS STEP ───────────────────────────────────────────────────────────────
+
 function TasksStep({ data, set, mode }: {
   data: WizardData;
   set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void;
@@ -1066,6 +1156,8 @@ function TasksStep({ data, set, mode }: {
       headline="What needs to get done?"
       subtext="Add everything on your plate. Sunday will fit it into your schedule."
     >
+      {/* AI mode quick preferences */}
+      {mode === "ai" && <AIQuickPrefs data={data} set={set} />}
       {/* Task list */}
       {data.tasks.length > 0 && (
         <div className="space-y-2 mb-5">
@@ -1456,17 +1548,19 @@ export default function SetupPage() {
         night_routine_mins: data.night_routine_mins,
         shower_mins: data.shower_mins,
         shower_preference: data.shower_preference,
-        meals_per_day: data.meals_per_day,
-        meal_duration_mins: data.meal_duration_mins,
+        meals_per_day: mode === "ai" ? data.ai_meals_per_day : data.meals_per_day,
+        meal_duration_mins: mode === "ai" ? data.ai_meal_duration_mins : data.meal_duration_mins,
         meal_prep_days: data.meal_prep_days,
         gym_days_per_week: data.gym_days_per_week,
         gym_duration_mins: data.gym_duration_mins,
         muay_thai_days_per_week: data.muay_thai_days_per_week,
         muay_thai_duration_mins: data.muay_thai_duration_mins,
         workout_time_preference: data.workout_time_preference,
-        commute_minutes: data.is_remote ? 0 : data.commute_minutes,
-        is_remote: data.is_remote,
-        work_days_per_week: data.work_days_per_week,
+        commute_minutes: mode === "ai"
+          ? (data.ai_has_commute ? data.ai_commute_mins : 0)
+          : (data.is_remote ? 0 : data.commute_minutes),
+        is_remote: mode === "ai" ? !data.ai_has_commute : data.is_remote,
+        work_days_per_week: mode === "ai" ? (data.ai_has_commute ? 5 : 0) : data.work_days_per_week,
         work_location_name: data.work_location_name || null,
         weekly_task_capacity_hours: data.weekly_task_capacity_hours,
         energy_preference: data.energy_preference,

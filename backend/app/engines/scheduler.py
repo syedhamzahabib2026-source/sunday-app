@@ -125,57 +125,53 @@ def _get_ai_scheduling_hints(
         print("[scheduler] ANTHROPIC_API_KEY not set — skipping AI scheduling hints")
         return {}
 
-    task_lines = "\n".join(
-        f"- {t.title} ({t.priority} priority, {t.duration_minutes} min)"
-        for t in tasks[:25]  # cap to avoid huge prompts on large task lists
+    system_prompt = (
+        "You are a scheduling assistant. Given a list of tasks and constraints, "
+        "return ONLY a JSON object mapping each task title to its ideal time slot. "
+        "No explanations. No markdown. Raw JSON only."
     )
 
-    prompt = f"""You are a scheduling assistant helping build a weekly schedule.
+    task_data = [
+        {"title": t.title, "duration_min": t.duration_minutes,
+         "priority": t.priority, "deadline": str(t.deadline)}
+        for t in tasks[:25]
+    ]
 
-User constraints: Wake {wake_time}, Bed {bed_time}.
+    user_prompt = (
+        f"User constraints:\n"
+        f"- Wake: {wake_time}, Sleep: {bed_time}\n"
+        f"- Work hours: 9am-6pm preferred\n"
+        f"- Energy: high in morning, low after 3pm\n\n"
+        f"Tasks to schedule:\n{json.dumps(task_data, indent=2)}\n\n"
+        f"User preferences: {scheduling_notes or 'none'}\n\n"
+        f'Return JSON: {{"task title": "morning|afternoon|evening|any"}}'
+    )
 
-User scheduling preferences (follow these closely):
-{scheduling_notes}
-
-Apply these preferences when deciding task order, time-of-day placement, and free time distribution.
-
-Tasks to schedule:
-{task_lines}
-
-For each task, return the preferred time of day as exactly one of:
-  "morning"   (before 12pm)
-  "afternoon" (12pm–5pm)
-  "evening"   (after 5pm)
-  "any"       (no preference)
-
-Respond ONLY with a valid JSON object mapping task title to time preference.
-Example: {{"Deep work session": "morning", "Call dentist": "any"}}
-Only include tasks whose preference is clearly indicated by the notes. Use "any" when unsure."""
-
-    print(f"[scheduler] scheduling_notes received — sending to Claude AI prompt:\n"
-          f"--- SCHEDULING NOTES START ---\n{scheduling_notes}\n--- SCHEDULING NOTES END ---")
+    print(f"[scheduler] Sending {len(task_data)} tasks to Claude for scheduling hints")
 
     try:
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
+            max_tokens=256,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
         )
         raw = response.content[0].text.strip()
-        print(f"[scheduler] Claude AI scheduling hints response: {raw}")
+        print(f"[scheduler] Claude scheduling hints: {raw}")
 
         if "{" in raw and "}" in raw:
             json_str = raw[raw.index("{") : raw.rindex("}") + 1]
             hints = json.loads(json_str)
-            # Normalise values to lowercase
             return {k: str(v).lower() for k, v in hints.items()}
 
     except Exception as exc:
-        print(f"[scheduler] AI hint call failed (non-fatal, using algorithmic fallback): {exc}")
+        print(f"[scheduler] AI hint call failed (non-fatal): {exc}")
+        # Fall back: "any" for all tasks so scheduler uses algorithmic placement
+        return {t.title: "any" for t in tasks}
 
-    return {}
+    return {t.title: "any" for t in tasks}
 
 
 # ── Main engine ───────────────────────────────────────────────────────────────
@@ -248,17 +244,14 @@ def generate_weekly_schedule(
     commute_minutes         = p("commute_minutes",        30)
     is_remote               = p("is_remote",              False)
 
-    # AI mode: apply sensible universal defaults (no commute, 3 meals, gym 3×, no Muay Thai)
+    # AI mode: override wake/bed time defaults and disable Muay Thai.
+    # Meals, commute, gym: use the user's saved prefs (set via AI quick-prefs UI).
     if p("mode", "manual") == "ai":
         preferred_wake_time     = "07:00"
         preferred_bedtime       = "23:00"
         morning_routine_mins    = 30
         night_routine_mins      = 20
-        meals_per_day           = 3
-        gym_days_per_week       = 3
-        muay_thai_days_per_week = 0
-        commute_minutes         = 0
-        is_remote               = True
+        muay_thai_days_per_week = 0  # AI mode never schedules Muay Thai
 
     tasks: List[Task] = (
         db.query(Task)
@@ -605,8 +598,13 @@ def reorganize_missed_task(
     db: Session,
 ) -> Dict[str, Any]:
     """
-    Find the next available 30-min-grid slot this week for a missed task
-    and insert a new ScheduleBlock for it.
+    Full priority-aware rescheduler. Scores all candidate slots and picks best.
+    Priority rules:
+      optional  → always dropped
+      low       → only reschedule if slot available today/tomorrow
+      medium    → reschedule within week, same time-of-day preferred
+      high      → ASAP, any slot
+      critical  → ASAP, flag as needs_attention if no slot found
     """
     missed_block = db.query(ScheduleBlock).filter(ScheduleBlock.id == missed_block_id).first()
     if not missed_block or not missed_block.task_id:
@@ -616,31 +614,37 @@ def reorganize_missed_task(
     if not task:
         return {"rescheduled": False, "reason": "task_not_found"}
 
+    priority  = task.priority or "medium"
     task_slots = slots_needed(task.duration_minutes)
 
-    # Current moment (UTC naive — consistent with rest of engine)
-    now       = datetime.utcnow()
-    today     = now.date()
-    # Start searching from now + 30 min, rounded up to next slot boundary
-    now_mins  = now.hour * 60 + now.minute + 30
-    search_start_slot = min(now_mins // 30 + 1, SLOTS_PER_DAY)
+    now   = datetime.utcnow()
+    today = now.date()
 
-    # Week runs Mon–Sun; Sunday of the current week is the search ceiling
-    week_end = today + timedelta(days=6 - today.weekday())
+    # ── Step 2: early-drop rules ──────────────────────────────────────────────
+    if priority == "optional":
+        return {"rescheduled": False, "reason": "optional_dropped", "task_title": task.title}
 
-    # Deadline constraint
+    deadline_date: Optional[date] = None
     if task.deadline:
         deadline_date = task.deadline.date() if hasattr(task.deadline, "date") else today
-        search_end = min(deadline_date, week_end)
-    else:
-        search_end = week_end
+        if deadline_date < today:
+            return {"rescheduled": False, "reason": "deadline_passed", "task_title": task.title}
 
-    if search_end < today:
-        return {"rescheduled": False, "reason": "deadline_passed", "task_title": task.title}
+    # ── Search window ─────────────────────────────────────────────────────────
+    week_end   = today + timedelta(days=6 - today.weekday())
+    search_end = min(deadline_date, week_end) if deadline_date else week_end
 
-    num_days = (search_end - today).days + 1
+    # Low priority: only look today and tomorrow
+    if priority == "low":
+        search_end = min(search_end, today + timedelta(days=1))
 
-    # Build a time_map from all future blocks this window (excluding the missed one)
+    num_days = max(1, (search_end - today).days + 1)
+
+    # Start slot: now + 30 min
+    now_mins          = now.hour * 60 + now.minute + 30
+    search_start_slot = min(now_mins // 30 + 1, SLOTS_PER_DAY)
+
+    # ── Build time_map ────────────────────────────────────────────────────────
     time_map: List[List[bool]] = [[False] * SLOTS_PER_DAY for _ in range(num_days)]
 
     future_blocks = (
@@ -663,37 +667,83 @@ def reorganize_missed_task(
         s_end   = SLOTS_PER_DAY if (eh == 0 and em == 0) else time_to_slot(fb.end_time)
         mark_occupied(time_map, d_offset, s_start, max(1, s_end - s_start))
 
-    # Block out past slots on today including search buffer
     mark_occupied(time_map, 0, 0, min(search_start_slot, SLOTS_PER_DAY))
 
-    # Scan days in order, find first fitting slot
+    # ── Step 3: score all candidate slots ────────────────────────────────────
+    LATE_NIGHT_SLOT = time_to_slot("22:00")
+    MEAL_SLOTS      = [time_to_slot("08:00"), time_to_slot("12:30"), time_to_slot("19:00")]
+    original_slot   = time_to_slot(missed_block.start_time) if missed_block else None
+
+    def _orig_period(s: Optional[int]) -> int:
+        if s is None: return 1
+        return 0 if s < 24 else 1 if s < 34 else 2
+
+    orig_period = _orig_period(original_slot)
+
+    candidates: List[tuple] = []  # (score, d_offset, start_slot)
+
     for d_offset in range(num_days):
         from_slot = search_start_slot if d_offset == 0 else 0
-        slot = find_free_slot(time_map, d_offset, task_slots, start_from=from_slot)
-        if slot is not None:
-            new_date = today + timedelta(days=d_offset)
-            new_block = ScheduleBlock(
-                user_id       = user_id,
-                task_id       = task.id,
-                block_type    = "task",
-                title         = task.title,
-                start_time    = slot_to_time(slot),
-                end_time      = slot_to_time(slot + task_slots),
-                date          = new_date,
-                is_locked     = False,
-                priority      = task.priority,
-                is_rescheduled= True,
-            )
-            db.add(new_block)
-            db.commit()
-            db.refresh(new_block)
-            return {
-                "rescheduled":    True,
-                "task_title":     task.title,
-                "new_date":       str(new_date),
-                "new_start_time": slot_to_time(slot),
-                "new_end_time":   slot_to_time(slot + task_slots),
-                "block_id":       new_block.id,
-            }
+        for start in range(from_slot, SLOTS_PER_DAY - task_slots + 1):
+            if not all(not time_map[d_offset][s] for s in range(start, start + task_slots)):
+                continue  # slot occupied
 
-    return {"rescheduled": False, "reason": "no_slot_found", "task_title": task.title}
+            score = d_offset  # day penalty: today=0, tomorrow=1, …
+
+            # Late-night penalty
+            if start >= LATE_NIGHT_SLOT:
+                score += 2
+
+            # Meal-time adjacency penalty
+            for ms in MEAL_SLOTS:
+                if abs(start - ms) <= 1:
+                    score += 1
+                    break
+
+            # Time-of-day match bonus (medium priority prefers same period)
+            if priority in ("medium", "low"):
+                slot_period = 0 if start < 24 else 1 if start < 34 else 2
+                if slot_period == orig_period:
+                    score -= 1
+
+            candidates.append((score, d_offset, start))
+
+    if not candidates:
+        if priority in ("critical", "high"):
+            return {
+                "rescheduled": False,
+                "reason": "needs_attention",
+                "task_title": task.title,
+                "priority": priority,
+            }
+        return {"rescheduled": False, "reason": "no_slot_found", "task_title": task.title}
+
+    # ── Step 4: insert at best slot ──────────────────────────────────────────
+    candidates.sort()
+    _, best_d_offset, best_slot = candidates[0]
+    new_date = today + timedelta(days=best_d_offset)
+
+    new_block = ScheduleBlock(
+        user_id       = user_id,
+        task_id       = task.id,
+        block_type    = "task",
+        title         = task.title,
+        start_time    = slot_to_time(best_slot),
+        end_time      = slot_to_time(best_slot + task_slots),
+        date          = new_date,
+        is_locked     = False,
+        priority      = task.priority,
+        is_rescheduled= True,
+    )
+    db.add(new_block)
+    db.commit()
+    db.refresh(new_block)
+
+    return {
+        "rescheduled":    True,
+        "task_title":     task.title,
+        "new_date":       str(new_date),
+        "new_start_time": slot_to_time(best_slot),
+        "new_end_time":   slot_to_time(best_slot + task_slots),
+        "block_id":       new_block.id,
+    }
