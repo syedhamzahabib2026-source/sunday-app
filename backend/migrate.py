@@ -58,6 +58,7 @@ def run_migrations() -> None:
     _add_column_if_missing("weekly_preferences",  "scheduling_notes",  "TEXT")
     _add_column_if_missing("schedule_blocks",     "status",            "VARCHAR")
     _add_column_if_missing("schedule_blocks",     "is_rescheduled",    "BOOLEAN DEFAULT FALSE")
+    _add_column_if_missing("schedules",           "week_type",         "VARCHAR DEFAULT 'current'")
 
     print("  [migrate] all migrations applied")
 

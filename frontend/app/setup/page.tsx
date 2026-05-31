@@ -115,6 +115,13 @@ function minsToTime(mins: number): string {
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 }
 
+function formatWeekRange(monday: Date): string {
+  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+  const s = monday.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const e = sunday.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${s} – ${e}`;
+}
+
 function fmt12(t: string): string {
   const [h, m] = t.split(":").map(Number);
   const period = h >= 12 ? "PM" : "AM";
@@ -422,9 +429,42 @@ function StepShell({ headline, subtext, children }: {
 
 // ─── MODE SCREEN ──────────────────────────────────────────────────────────────
 
-function ModeScreen({ onSelect }: { onSelect: (m: Mode) => void }) {
+function ModeScreen({ onSelect, weekTarget, setWeekTarget }: {
+  onSelect: (m: Mode) => void;
+  weekTarget: "current" | "next";
+  setWeekTarget: (t: "current" | "next") => void;
+}) {
   return (
     <div className="w-full max-w-lg mx-auto fade-in">
+      {/* Week selector */}
+      <div className="mb-8">
+        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3 text-center">
+          Which week are you planning?
+        </p>
+        <div className="flex bg-gray-100 rounded-full p-1 gap-1 max-w-xs mx-auto">
+          {(["current", "next"] as const).map(t => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setWeekTarget(t)}
+              className={`flex-1 py-2 rounded-full text-[14px] font-semibold transition-all ${
+                weekTarget === t
+                  ? "bg-white text-indigo-600 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {t === "current" ? "This week" : "Next week"}
+            </button>
+          ))}
+        </div>
+        {weekTarget === "next" && (
+          <div className="mt-3 flex items-center gap-2 justify-center text-[13px] text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5 max-w-xs mx-auto">
+            <span>✦</span>
+            <span>Goes live automatically on Sunday at midnight</span>
+          </div>
+        )}
+      </div>
+
       <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-3 tracking-tight">
         How do you want to plan?
       </h1>
@@ -1245,10 +1285,11 @@ function FreeTextStep({ data, set }: { data: WizardData; set: <K extends keyof W
 
 // ─── REVIEW STEP ─────────────────────────────────────────────────────────────
 
-function ReviewStep({ data, set, mode }: {
+function ReviewStep({ data, set, mode, weekTarget }: {
   data: WizardData;
   set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void;
   mode: Mode;
+  weekTarget: "current" | "next";
 }) {
   const sleepHoursPerWeek = data.sleep_target_hours * 7;
   const routineMinsPerWeek = (data.morning_routine_mins + data.night_routine_mins + data.shower_mins) * 7;
@@ -1273,6 +1314,13 @@ function ReviewStep({ data, set, mode }: {
       headline="Your week, by the numbers."
       subtext={`${mode === "ai" ? "Review your tasks" : "Review all your settings"} before Sunday builds your schedule.`}
     >
+      {weekTarget === "next" && (
+        <div className="mb-5 flex items-center gap-2 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-[13px] text-indigo-600 font-medium">
+          <span>✦</span>
+          <span>{formatWeekRange(getFollowingMonday())} · Goes live Sunday at midnight</span>
+        </div>
+      )}
+
       {mode === "manual" && (
         <div className="grid grid-cols-2 gap-3 mb-7">
           {summaryItems.map(({ label, value }) => (
@@ -1330,8 +1378,9 @@ function ReviewStep({ data, set, mode }: {
 
 // ─── DONE SCREEN ──────────────────────────────────────────────────────────────
 
-function DoneScreen() {
+function DoneScreen({ weekTarget }: { weekTarget: "current" | "next" }) {
   const router = useRouter();
+  const isNext = weekTarget === "next";
   return (
     <div className="w-full max-w-lg mx-auto text-center fade-in">
       <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mx-auto mb-8">
@@ -1340,14 +1389,19 @@ function DoneScreen() {
         </svg>
       </div>
       <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-4 tracking-tight">
-        Your week is protected.
+        {isNext ? "Next week is locked in." : "Your week is protected."}
       </h1>
       <p className="text-[16px] text-gray-500 mb-12 leading-relaxed">
-        Sunday generates your first schedule on Sunday.
+        {isNext
+          ? "Goes live automatically on Sunday at 12:00 AM."
+          : "Sunday generates your first schedule on Sunday."}
       </p>
-      <button type="button" onClick={() => router.push("/week")}
-        className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-indigo-600 text-white text-[16px] font-semibold hover:bg-indigo-700 transition-colors">
-        View this week →
+      <button
+        type="button"
+        onClick={() => router.push(isNext ? "/week?preview=next" : "/week")}
+        className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-indigo-600 text-white text-[16px] font-semibold hover:bg-indigo-700 transition-colors"
+      >
+        {isNext ? "Preview next week →" : "View this week →"}
       </button>
     </div>
   );
@@ -1404,11 +1458,20 @@ function DraftPrompt({ draft, onResume, onDiscard }: {
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
+function getFollowingMonday(): Date {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dow = today.getDay();
+  const daysToNextMon = dow === 0 ? 1 : 8 - dow;
+  const d = new Date(today); d.setDate(today.getDate() + daysToNextMon);
+  return d;
+}
+
 export default function SetupPage() {
   const [mode,          setMode]          = useState<Mode | null>(null);
   const [step,          setStep]          = useState(1);
   const [direction,     setDirection]     = useState<1 | -1>(1);
   const [data,          setData]          = useState<WizardData>(DEFAULTS);
+  const [weekTarget,    setWeekTarget]    = useState<"current" | "next">("current");
   const [generating,    setGenerating]    = useState(false);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
   const [errMsg,        setErrMsg]        = useState<string | null>(null);
@@ -1416,8 +1479,15 @@ export default function SetupPage() {
   const [draft,         setDraft]         = useState<DraftState | null>(null);
   const [draftChecked,  setDraftChecked]  = useState(false);
 
-  // On mount: check for saved draft, then fall back to ?step= query param
+  // On mount: check for saved draft, then fall back to ?step= / ?week= query params
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    // Apply ?week=next regardless of draft state
+    if (params.get("week") === "next") {
+      setWeekTarget("next");
+    }
+
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
       if (raw) {
@@ -1425,15 +1495,14 @@ export default function SetupPage() {
         if (parsed.mode && parsed.data && parsed.step) {
           setDraft(parsed);
           setDraftChecked(true);
-          return; // draft takes priority over query param
+          return; // draft takes priority over step query param
         }
       }
     } catch {
       // ignore corrupt storage
     }
 
-    // No draft — check ?step= query param (Bug 1 fix)
-    const params = new URLSearchParams(window.location.search);
+    // No draft — check ?step= query param
     const stepParam = params.get("step");
     if (stepParam === "1") {
       setMode("manual");
@@ -1518,11 +1587,11 @@ export default function SetupPage() {
       if (step === 2) return <Step2 {...props} />;
       if (step === 3) return <Step3 {...props} />;
       if (step === 4) return <TasksStep {...props} mode={mode} />;
-      if (step === 5) return <ReviewStep data={data} set={set} mode={mode} />;
+      if (step === 5) return <ReviewStep data={data} set={set} mode={mode} weekTarget={weekTarget} />;
     }
     if (mode === "ai") {
       if (step === 1) return <TasksStep {...props} mode={mode} />;
-      if (step === 2) return <ReviewStep data={data} set={set} mode={mode} />;
+      if (step === 2) return <ReviewStep data={data} set={set} mode={mode} weekTarget={weekTarget} />;
     }
     return null;
   }
@@ -1533,7 +1602,9 @@ export default function SetupPage() {
     setLoadingMsgIdx(0);
     try {
       const generationTimestamp = new Date().toISOString();
-      const weekStart = toLocalDateString(getCurrentMonday());
+      const weekStart = toLocalDateString(
+        weekTarget === "next" ? getFollowingMonday() : getCurrentMonday()
+      );
       const serializedCommitments = data.fixed_commitments.map(c =>
         JSON.stringify({ name: c.name, time: c.time, duration: c.duration, days: c.days })
       );
@@ -1590,7 +1661,7 @@ export default function SetupPage() {
         });
       }
 
-      await generateSchedule(USER_ID, weekStart, generationTimestamp);
+      await generateSchedule(USER_ID, weekStart, generationTimestamp, weekTarget);
       try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
       setGenerating(false);
       setDone(true);
@@ -1631,11 +1702,11 @@ export default function SetupPage() {
       {/* Content */}
       <div className="min-h-screen flex flex-col items-center justify-center px-6 py-24">
         {done ? (
-          <DoneScreen />
+          <DoneScreen weekTarget={weekTarget} />
         ) : draft !== null && draftChecked ? (
           <DraftPrompt draft={draft} onResume={resumeDraft} onDiscard={discardDraft} />
         ) : mode === null ? (
-          <ModeScreen onSelect={selectMode} />
+          <ModeScreen onSelect={selectMode} weekTarget={weekTarget} setWeekTarget={setWeekTarget} />
         ) : (
           <div key={`${mode}-${step}`} className={`w-full ${animClass}`}>
             {renderStep()}

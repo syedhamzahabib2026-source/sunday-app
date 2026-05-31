@@ -98,6 +98,7 @@ class GenerateScheduleRequest(BaseModel):
     user_id: int
     week_start_date: str            # "YYYY-MM-DD"
     generation_timestamp: Optional[str] = None  # ISO 8601 from client
+    week_target: str = "current"    # "current" | "next"
 
 
 @router.post("/generate")
@@ -111,9 +112,12 @@ def generate_schedule(
     except ValueError:
         raise HTTPException(status_code=422, detail="week_start_date must be YYYY-MM-DD")
 
+    # Next week: no 1-hour offset — generate the full week from Monday 00:00
+    generation_ts = None if payload.week_target == "next" else payload.generation_timestamp
+
     result = generate_weekly_schedule(
         payload.user_id, week_start, db,
-        generation_timestamp=payload.generation_timestamp,
+        generation_timestamp=generation_ts,
     )
 
     return {

@@ -170,6 +170,7 @@ export function generateSchedule(
   userId: number,
   weekStart: string,
   generationTimestamp?: string,
+  weekTarget: "current" | "next" = "current",
 ): Promise<GenerateResult> {
   return apiFetch("/schedule/generate", {
     method: "POST",
@@ -177,6 +178,7 @@ export function generateSchedule(
       user_id: userId,
       week_start_date: weekStart,
       ...(generationTimestamp ? { generation_timestamp: generationTimestamp } : {}),
+      week_target: weekTarget,
     }),
   });
 }

@@ -46,7 +46,22 @@ function fmtDayFull(dateStr: string): string {
   return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 }
 
+function getNextMonday(): Date {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dow = today.getDay();
+  const d = new Date(today); d.setDate(today.getDate() + (dow === 0 ? 1 : 8 - dow));
+  return d;
+}
+
 export default function WeekPage() {
+  // Read ?preview=next from URL to auto-select next week view
+  const [viewingNext, setViewingNext] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search).get("preview") === "next";
+    }
+    return false;
+  });
+
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()));
   const [blocks, setBlocks] = useState<ScheduleBlock[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,11 +85,12 @@ export default function WeekPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError(null);
-    getWeekSchedule(USER_ID, toLocalDateString(weekStart))
+    const ws = viewingNext ? getNextMonday() : weekStart;
+    getWeekSchedule(USER_ID, toLocalDateString(ws))
       .then(d => { if (!cancelled) { setBlocks(d); setLoading(false); } })
       .catch(e => { if (!cancelled) { setError(String(e)); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [weekStart]);
+  }, [weekStart, viewingNext]);
 
   useEffect(() => {
     getArchivedSchedules(USER_ID).then(setArchivedSchedules).catch(() => {});
@@ -141,19 +157,21 @@ export default function WeekPage() {
     getWeekSchedule(1, ws).then(setBlocks).catch(() => {});
   }
 
+  const displayWeekStart = viewingNext ? getNextMonday() : weekStart;
+
   const blocksByDay: Record<string, ScheduleBlock[]> = {};
   for (const b of blocks) (blocksByDay[b.date] ??= []).push(b);
 
   const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart); d.setDate(d.getDate() + i); return d;
+    const d = new Date(displayWeekStart); d.setDate(d.getDate() + i); return d;
   });
 
   const daysWithBlocks = days.filter(d => (blocksByDay[toLocalDateString(d)]?.length ?? 0) > 0).length;
   const taskBlocks = blocks.filter(b => b.block_type === "task");
   const totalHours = Math.round(blocks.reduce((s, b) => s + blockMins(b), 0) / 60 * 10) / 10;
 
-  // Week progress bar (only for current week)
-  const isCurrentWeek = toLocalDateString(weekStart) === toLocalDateString(getMonday(new Date()));
+  // Week progress bar (only for current week, not draft view)
+  const isCurrentWeek = !viewingNext && toLocalDateString(weekStart) === toLocalDateString(getMonday(new Date()));
   const weekProgressPct = (() => {
     const now = new Date();
     const dayOfWeek = now.getDay(); // 0=Sun
@@ -163,13 +181,23 @@ export default function WeekPage() {
   })();
 
   return (
+    <>
+      {/* Draft banner — full-width, above the page container */}
+      {viewingNext && (
+        <div className="w-full bg-amber-50 border-b border-amber-200 px-4 py-2.5 text-center">
+          <span className="text-[13px] font-medium text-amber-600">
+            Draft — goes live Sunday at midnight
+          </span>
+        </div>
+      )}
+
     <div className="px-4 sm:px-6 pt-7 pb-16 max-w-7xl mx-auto page-fade">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
         <div>
           <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1">Week</p>
           <div className="flex items-center gap-3">
-            <h1 className="text-[20px] font-semibold text-zinc-900">{formatWeekRange(weekStart)}</h1>
+            <h1 className="text-[20px] font-semibold text-zinc-900">{formatWeekRange(displayWeekStart)}</h1>
             {!loading && !error && (
               <span className="text-[11px] font-medium bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-100">
                 {daysWithBlocks} of 7 days
@@ -177,17 +205,35 @@ export default function WeekPage() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1 bg-zinc-50 border border-zinc-200 rounded-xl p-1 self-start sm:self-auto">
-          {[[-1, "← Prev"], [0, "Today"], [1, "Next →"]].map(([offset, label]) => (
-            <button
-              key={String(label)}
-              onClick={() => offset === 0 ? setWeekStart(getMonday(new Date())) : setWeekStart(p => addWeeks(p, offset as number))}
-              className="text-[13px] font-medium text-zinc-500 hover:text-zinc-900 hover:bg-white px-3 py-1.5 rounded-lg transition-all"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {!viewingNext && (
+          <div className="flex items-center gap-1 bg-zinc-50 border border-zinc-200 rounded-xl p-1 self-start sm:self-auto">
+            {[[-1, "← Prev"], [0, "Today"], [1, "Next →"]].map(([offset, label]) => (
+              <button
+                key={String(label)}
+                onClick={() => offset === 0 ? setWeekStart(getMonday(new Date())) : setWeekStart(p => addWeeks(p, offset as number))}
+                className="text-[13px] font-medium text-zinc-500 hover:text-zinc-900 hover:bg-white px-3 py-1.5 rounded-lg transition-all"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* This week / Next week toggle */}
+      <div className="flex items-center bg-zinc-100 rounded-xl p-1 gap-1 self-start mb-5 w-fit">
+        <button
+          onClick={() => setViewingNext(false)}
+          className={`px-4 py-1.5 rounded-lg text-[13px] font-medium transition-all ${!viewingNext ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"}`}
+        >
+          This week
+        </button>
+        <button
+          onClick={() => setViewingNext(true)}
+          className={`px-4 py-1.5 rounded-lg text-[13px] font-medium transition-all ${viewingNext ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"}`}
+        >
+          Next week (draft)
+        </button>
       </div>
 
       {/* Week progress bar */}
@@ -231,6 +277,20 @@ export default function WeekPage() {
 
       {!loading && error && (
         <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-[13px] text-red-700">{error}</div>
+      )}
+
+      {/* Empty state for next week with no schedule yet */}
+      {viewingNext && !loading && !error && blocks.length === 0 && (
+        <div className="py-20 text-center">
+          <p className="text-[16px] font-medium text-zinc-500 mb-2">No schedule planned for next week yet</p>
+          <p className="text-[13px] text-zinc-400 mb-6">Build your next week in advance and it goes live Sunday at midnight.</p>
+          <a
+            href="/setup?week=next"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl text-[14px] font-semibold hover:bg-indigo-700 transition-colors"
+          >
+            Plan next week →
+          </a>
+        </div>
       )}
 
       {/* 7-column grid */}
@@ -373,5 +433,6 @@ export default function WeekPage() {
         </div>
       )}
     </div>
+    </>
   );
 }
