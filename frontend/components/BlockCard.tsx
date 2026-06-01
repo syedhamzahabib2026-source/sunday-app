@@ -2,7 +2,7 @@
 
 import {
   Moon, Utensils, Dumbbell, Car, Sunrise,
-  Briefcase, Flame, CheckCircle2,
+  Briefcase, Flame, CheckCircle2, Zap,
 } from "lucide-react";
 import { ScheduleBlock } from "@/lib/api";
 
@@ -22,8 +22,9 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   commute:   { color: "#7c3aed", label: "Commute",   Icon: Car       },
   routine:   { color: "#71717a", label: "Routine",   Icon: Sunrise   },
   buffer:    { color: "#71717a", label: "Buffer",    Icon: Sunrise   },
-  task:      { color: "#3b82f6", label: "Task",      Icon: Briefcase },
-  event:     { color: "#0891b2", label: "Event",     Icon: Briefcase },
+  task:       { color: "#3b82f6", label: "Task",       Icon: Briefcase },
+  event:      { color: "#0891b2", label: "Event",      Icon: Briefcase },
+  deep_work:  { color: "#2563eb", label: "Deep Work",  Icon: Zap       },
 };
 
 const PRIORITY_COLORS: Record<string, string> = {

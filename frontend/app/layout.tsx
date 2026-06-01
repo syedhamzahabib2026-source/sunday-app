@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { DM_Sans } from "next/font/google";
 import "./globals.css";
 import Nav from "@/components/Nav";
+import ClientProviders from "@/components/ClientProviders";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -18,8 +19,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" className={dmSans.variable}>
       <body className="antialiased bg-white text-zinc-900 min-h-screen">
-        <Nav />
-        <main>{children}</main>
+        <ClientProviders>
+          <Nav />
+          <main>{children}</main>
+        </ClientProviders>
       </body>
     </html>
   );

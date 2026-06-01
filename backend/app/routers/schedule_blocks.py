@@ -1,44 +1,43 @@
 from datetime import date
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal
+from app.auth import get_current_user, get_db
 from app.models.schedule_block import ScheduleBlock
+from app.models.user import User
 from app.schemas.schedule_block import ScheduleBlockCreate, ScheduleBlockResponse
 from app.schemas.task import TaskResponse
 
 router = APIRouter(prefix="/schedule", tags=["schedule_blocks"])
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# ── Existing endpoints ────────────────────────────────────────────────────────
-
 @router.post("/", response_model=ScheduleBlockResponse, status_code=201)
-def create_block(payload: ScheduleBlockCreate, db: Session = Depends(get_db)):
-    block = ScheduleBlock(**payload.model_dump())
+def create_block(
+    payload: ScheduleBlockCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    block = ScheduleBlock(**payload.model_dump(), user_id=current_user.id)
     db.add(block)
     db.commit()
     db.refresh(block)
     return block
 
 
-@router.get("/{user_id}/week/{week_start}", response_model=List[ScheduleBlockResponse])
-def get_week_schedule(user_id: int, week_start: date, db: Session = Depends(get_db)):
+@router.get("/week/{week_start}", response_model=List[ScheduleBlockResponse])
+def get_week_schedule(
+    week_start: date,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     from datetime import timedelta
     week_end = week_start + timedelta(days=6)
     return (
         db.query(ScheduleBlock)
         .filter(
-            ScheduleBlock.user_id == user_id,
+            ScheduleBlock.user_id == current_user.id,
             ScheduleBlock.date >= week_start,
             ScheduleBlock.date <= week_end,
         )
@@ -47,19 +46,30 @@ def get_week_schedule(user_id: int, week_start: date, db: Session = Depends(get_
     )
 
 
-@router.get("/{user_id}/day/{day}", response_model=List[ScheduleBlockResponse])
-def get_day_schedule(user_id: int, day: date, db: Session = Depends(get_db)):
+@router.get("/day/{day}", response_model=List[ScheduleBlockResponse])
+def get_day_schedule(
+    day: date,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     return (
         db.query(ScheduleBlock)
-        .filter(ScheduleBlock.user_id == user_id, ScheduleBlock.date == day)
+        .filter(ScheduleBlock.user_id == current_user.id, ScheduleBlock.date == day)
         .order_by(ScheduleBlock.start_time)
         .all()
     )
 
 
 @router.delete("/block/{block_id}", status_code=204)
-def delete_block(block_id: int, db: Session = Depends(get_db)):
-    block = db.query(ScheduleBlock).filter(ScheduleBlock.id == block_id).first()
+def delete_block(
+    block_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    block = db.query(ScheduleBlock).filter(
+        ScheduleBlock.id == block_id,
+        ScheduleBlock.user_id == current_user.id,
+    ).first()
     if not block:
         raise HTTPException(status_code=404, detail="Schedule block not found")
     db.delete(block)
@@ -67,8 +77,15 @@ def delete_block(block_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{block_id}/lock", response_model=ScheduleBlockResponse)
-def lock_block(block_id: int, db: Session = Depends(get_db)):
-    block = db.query(ScheduleBlock).filter(ScheduleBlock.id == block_id).first()
+def lock_block(
+    block_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    block = db.query(ScheduleBlock).filter(
+        ScheduleBlock.id == block_id,
+        ScheduleBlock.user_id == current_user.id,
+    ).first()
     if not block:
         raise HTTPException(status_code=404, detail="Schedule block not found")
     block.is_locked = True
@@ -82,8 +99,16 @@ class BlockStatusUpdate(BaseModel):
 
 
 @router.patch("/block/{block_id}/status", response_model=ScheduleBlockResponse)
-def update_block_status(block_id: int, payload: BlockStatusUpdate, db: Session = Depends(get_db)):
-    block = db.query(ScheduleBlock).filter(ScheduleBlock.id == block_id).first()
+def update_block_status(
+    block_id: int,
+    payload: BlockStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    block = db.query(ScheduleBlock).filter(
+        ScheduleBlock.id == block_id,
+        ScheduleBlock.user_id == current_user.id,
+    ).first()
     if not block:
         raise HTTPException(status_code=404, detail="Schedule block not found")
     block.status = payload.status
@@ -95,15 +120,17 @@ def update_block_status(block_id: int, payload: BlockStatusUpdate, db: Session =
 # ── Schedule generation ───────────────────────────────────────────────────────
 
 class GenerateScheduleRequest(BaseModel):
-    user_id: int
     week_start_date: str            # "YYYY-MM-DD"
-    generation_timestamp: Optional[str] = None  # ISO 8601 from client
+    generation_timestamp: Optional[str] = None
     week_target: str = "current"    # "current" | "next"
 
 
 @router.post("/generate")
 def generate_schedule(
-    payload: GenerateScheduleRequest, db: Session = Depends(get_db)
+    payload: GenerateScheduleRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     from app.engines.scheduler import generate_weekly_schedule
 
@@ -112,48 +139,53 @@ def generate_schedule(
     except ValueError:
         raise HTTPException(status_code=422, detail="week_start_date must be YYYY-MM-DD")
 
-    # Next week: no 1-hour offset — generate the full week from Monday 00:00
     generation_ts = None if payload.week_target == "next" else payload.generation_timestamp
 
     result = generate_weekly_schedule(
-        payload.user_id, week_start, db,
+        current_user.id, week_start, db,
         generation_timestamp=generation_ts,
     )
 
+    # Push to Google Calendar in the background (non-blocking)
+    if current_user.google_access_token:
+        block_ids = [b.id for b in result["blocks"]]
+        from app.services.google_calendar import push_blocks_to_calendar
+        background_tasks.add_task(push_blocks_to_calendar, current_user.id, block_ids)
+
     return {
-        "week_start":    str(result["week_start"]),
-        "block_count":   len(result["blocks"]),
-        "is_overloaded": result["is_overloaded"],
+        "week_start":        str(result["week_start"]),
+        "block_count":       len(result["blocks"]),
+        "is_overloaded":     result["is_overloaded"],
         "unscheduled_tasks": [
             TaskResponse.model_validate(t).model_dump() for t in result["unscheduled_tasks"]
         ],
-        "blocks_by_day": _group_by_day(result["blocks"]),
+        "blocks_by_day":     _group_by_day(result["blocks"]),
     }
 
 
 # ── Schedule reorganization ───────────────────────────────────────────────────
 
 class ReorganizeRequest(BaseModel):
-    user_id: int
     reason: str = "manual"
-    missed_block_id: Optional[int] = None  # set to trigger missed-task rescheduler
+    missed_block_id: Optional[int] = None
 
 
 @router.post("/reorganize")
 def reorganize_schedule(
-    payload: ReorganizeRequest, db: Session = Depends(get_db)
+    payload: ReorganizeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    # Missed-task fast rescheduler — find next free slot for one task
     if payload.missed_block_id is not None:
         from app.engines.scheduler import reorganize_missed_task
         try:
-            return reorganize_missed_task(payload.user_id, payload.missed_block_id, db)
+            return reorganize_missed_task(current_user.id, payload.missed_block_id, db)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Reschedule failed: {e}")
 
     from app.engines.reorganizer import reorganize_schedule as _reorg
 
-    result = _reorg(payload.user_id, db, payload.reason)
+    result = _reorg(current_user.id, db, payload.reason)
 
     def ser_tasks(task_list):
         return [TaskResponse.model_validate(t).model_dump() for t in task_list]

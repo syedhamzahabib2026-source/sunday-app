@@ -57,6 +57,10 @@ class WeeklyPreferences(Base):
     meal_lunch_time     = Column(String, nullable=True)
     meal_dinner_time    = Column(String, nullable=True)
 
+    # Deep work standing preference
+    deep_work_enabled = Column(Boolean, nullable=False, default=False)
+    deep_work_session_duration = Column(Integer, nullable=False, default=120)
+
     # Commitments
     fixed_commitments = Column(Text, nullable=True)  # JSON-encoded list
     notes = Column(Text, nullable=True)

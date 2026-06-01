@@ -5,7 +5,6 @@ from pydantic import BaseModel, field_validator
 
 
 class WeeklyPreferencesCreate(BaseModel):
-    user_id: int
     week_start_date: date
     sleep_target_hours: float = 8.0
     preferred_bedtime: str = "23:30"
@@ -36,6 +35,8 @@ class WeeklyPreferencesCreate(BaseModel):
     meal_breakfast_time: Optional[str] = None  # "HH:MM" preferred breakfast time
     meal_lunch_time:     Optional[str] = None  # "HH:MM" preferred lunch time
     meal_dinner_time:    Optional[str] = None  # "HH:MM" preferred dinner time
+    deep_work_enabled: bool = False
+    deep_work_session_duration: int = 120
 
 
 class WeeklyPreferencesUpdate(BaseModel):
@@ -68,6 +69,8 @@ class WeeklyPreferencesUpdate(BaseModel):
     meal_breakfast_time: Optional[str] = None
     meal_lunch_time:     Optional[str] = None
     meal_dinner_time:    Optional[str] = None
+    deep_work_enabled: Optional[bool] = None
+    deep_work_session_duration: Optional[int] = None
 
 
 class WeeklyPreferencesResponse(BaseModel):
@@ -103,6 +106,8 @@ class WeeklyPreferencesResponse(BaseModel):
     meal_breakfast_time: Optional[str]
     meal_lunch_time:     Optional[str]
     meal_dinner_time:    Optional[str]
+    deep_work_enabled: bool
+    deep_work_session_duration: int
     created_at: datetime
 
     @field_validator("meal_prep_days", "fixed_commitments", mode="before")

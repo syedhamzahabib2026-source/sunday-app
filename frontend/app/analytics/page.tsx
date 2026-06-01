@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { TrendingUp, CheckCircle2, Calendar, Zap } from "lucide-react";
 import { getAllTasks, getCompletions, getArchivedSchedules, Task, CompletionRecord, ScheduleRecord } from "@/lib/api";
-
-const USER_ID = 1;
+import { useAuth } from "@/contexts/AuthContext";
+import { useRouter } from "next/navigation";
 
 function StatCard({
   label, value, sub, iconBg, iconColor, Icon,
@@ -51,6 +51,13 @@ function HBar({ label, value, max, pct }: { label: string; value: number; max: n
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export default function AnalyticsPage() {
+  const { user, isLoading: authLoading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [user, authLoading, router]);
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [completions, setCompletions] = useState<CompletionRecord[]>([]);
   const [schedules, setSchedules] = useState<ScheduleRecord[]>([]);
@@ -58,11 +65,12 @@ export default function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getAllTasks(USER_ID), getCompletions(USER_ID), getArchivedSchedules(USER_ID)])
+    if (!user) return;
+    Promise.all([getAllTasks(), getCompletions(), getArchivedSchedules()])
       .then(([t, c, s]) => { setTasks(t); setCompletions(c); setSchedules(s); })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
-  }, []);
+  }, [user]);
 
   const hasData = tasks.length > 0 || completions.length > 0;
 

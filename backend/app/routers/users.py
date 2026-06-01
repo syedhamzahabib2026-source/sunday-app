@@ -2,19 +2,11 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal
+from app.auth import get_current_user, get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse
+from app.schemas.user import UserCreate, UserResponse, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post("/", response_model=UserResponse, status_code=201)
@@ -26,6 +18,17 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.patch("/me", response_model=UserResponse)
+def update_me(payload: UserUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if payload.name is not None:
+        current_user.name = payload.name
+    if payload.timezone is not None:
+        current_user.timezone = payload.timezone
+    db.commit()
+    db.refresh(current_user)
+    return current_user
 
 
 @router.get("/", response_model=List[UserResponse])

@@ -12,6 +12,7 @@ function getAccent(block: ScheduleBlock): string {
     case "event":     return "#0891b2";
     case "routine":
     case "buffer":    return "#a1a1aa";
+    case "deep_work": return "#2563eb";
     case "task": {
       switch (block.priority) {
         case "critical": return "#dc2626";

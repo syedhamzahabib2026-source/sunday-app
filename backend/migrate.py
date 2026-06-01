@@ -62,6 +62,15 @@ def run_migrations() -> None:
     _add_column_if_missing("schedule_blocks",     "status",              "VARCHAR")
     _add_column_if_missing("schedule_blocks",     "is_rescheduled",    "BOOLEAN DEFAULT FALSE")
     _add_column_if_missing("schedules",           "week_type",         "VARCHAR DEFAULT 'current'")
+    _add_column_if_missing("tasks",               "is_recurring",      "BOOLEAN DEFAULT FALSE")
+    _add_column_if_missing("weekly_preferences",  "deep_work_enabled",          "BOOLEAN DEFAULT FALSE")
+    _add_column_if_missing("weekly_preferences",  "deep_work_session_duration", "INTEGER DEFAULT 120")
+    # V2 — Google OAuth + auth
+    _add_column_if_missing("users", "google_id",            "VARCHAR")
+    _add_column_if_missing("users", "avatar_url",           "VARCHAR")
+    _add_column_if_missing("users", "google_access_token",  "TEXT")
+    _add_column_if_missing("users", "google_refresh_token", "TEXT")
+    _add_column_if_missing("users", "google_token_expiry",  "DATETIME")
 
     print("  [migrate] all migrations applied")
 

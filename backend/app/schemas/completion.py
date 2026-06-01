@@ -6,7 +6,6 @@ CompletionStatus = Literal["complete", "partial", "missed", "cancelled"]
 
 
 class CompletionCreate(BaseModel):
-    user_id: int
     schedule_block_id: int
     task_id: Optional[int] = None
     status: CompletionStatus

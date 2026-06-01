@@ -1,3 +1,5 @@
+import { getToken } from "@/lib/auth";
+
 const BASE = `${process.env.NEXT_PUBLIC_API_URL ?? "https://sunday-app-production-d774.up.railway.app"}/api/v1`;
 
 export type BlockType =
@@ -9,7 +11,8 @@ export type BlockType =
   | "muay_thai"
   | "routine"
   | "buffer"
-  | "event";
+  | "event"
+  | "deep_work";
 
 export interface ScheduleBlock {
   id: number;
@@ -22,7 +25,7 @@ export interface ScheduleBlock {
   date: string;       // "YYYY-MM-DD"
   is_locked: boolean;
   priority: string | null;
-  status: string | null;          // complete / missed / skipped / null
+  status: string | null;
   is_rescheduled: boolean;
   created_at: string;
 }
@@ -38,6 +41,12 @@ export interface Task {
   energy_level: string;
   is_flexible: boolean;
   status: string;
+  timing_preference: string | null;
+  preferred_days: string | null;
+  fixed_start_time: string | null;
+  fixed_end_time: string | null;
+  commute_minutes: number | null;
+  is_recurring: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -75,6 +84,16 @@ export interface WeeklyPreferences {
   meal_breakfast_time: string | null;
   meal_lunch_time:     string | null;
   meal_dinner_time:    string | null;
+  deep_work_enabled: boolean;
+  deep_work_session_duration: number;
+  created_at: string;
+}
+
+export interface UserLocation {
+  id: number;
+  user_id: number;
+  name: string;
+  commute_minutes: number;
   created_at: string;
 }
 
@@ -106,132 +125,14 @@ export interface GenerateResult {
   blocks_by_day: Record<string, ScheduleBlock[]>;
 }
 
-async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const url = `${BASE}${path}`;
-  console.log("[API] →", url);
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  console.log("[API] ←", res.status, url);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status}: ${text}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-export function getTodaySchedule(userId: number, date: string): Promise<ScheduleBlock[]> {
-  return apiFetch(`/schedule/${userId}/day/${date}`);
-}
-
-export function getWeekSchedule(userId: number, weekStart: string): Promise<ScheduleBlock[]> {
-  return apiFetch(`/schedule/${userId}/week/${weekStart}`);
-}
-
-export function updateTaskStatus(taskId: number, status: string): Promise<Task> {
-  return apiFetch(`/tasks/${taskId}/status`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
-  });
-}
-
-export function updateBlockStatus(blockId: number, status: string): Promise<ScheduleBlock> {
-  return apiFetch(`/schedule/block/${blockId}/status`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
-  });
-}
-
-export function reorganize(userId: number, reason = "manual"): Promise<ReorganizeResult> {
-  return apiFetch("/schedule/reorganize", {
-    method: "POST",
-    body: JSON.stringify({ user_id: userId, reason }),
-  });
-}
-
-export function reorganizeMissed(userId: number, missedBlockId: number): Promise<RescheduleResult> {
-  return apiFetch("/schedule/reorganize", {
-    method: "POST",
-    body: JSON.stringify({ user_id: userId, missed_block_id: missedBlockId, reason: "missed" }),
-  });
-}
-
-export function savePreferences(
-  data: Omit<WeeklyPreferences, "id" | "created_at">
-): Promise<WeeklyPreferences> {
-  return apiFetch("/preferences/", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-
-// Full URL: https://sunday-app-production-d774.up.railway.app/api/v1/schedule/generate
-// Route lives in backend/app/routers/schedule_blocks.py — POST /schedule/generate
-// (user_id is in the request body, not the path)
-export function generateSchedule(
-  userId: number,
-  weekStart: string,
-  generationTimestamp?: string,
-  weekTarget: "current" | "next" = "current",
-): Promise<GenerateResult> {
-  return apiFetch("/schedule/generate", {
-    method: "POST",
-    body: JSON.stringify({
-      user_id: userId,
-      week_start_date: weekStart,
-      ...(generationTimestamp ? { generation_timestamp: generationTimestamp } : {}),
-      week_target: weekTarget,
-    }),
-  });
-}
-
-export function getPreferences(userId: number): Promise<WeeklyPreferences> {
-  return apiFetch(`/preferences/${userId}/current`);
-}
-
-export interface TaskCreatePayload {
-  user_id: number;
-  title: string;
-  duration_minutes: number;
-  deadline: null;
-  priority: string;
-  energy_level: string;
-  is_flexible: boolean;
-  timing_preference?: string;
-  preferred_days?: string | null;
-  fixed_start_time?: string | null;
-  fixed_end_time?: string | null;
-  commute_minutes?: number;
-}
-
-export function createTask(data: TaskCreatePayload): Promise<Task> {
-  return apiFetch("/tasks/", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-
 export interface ScheduleRecord {
   id: number;
   user_id: number;
-  week_start_date: string;   // "YYYY-MM-DD"
-  status: string;            // "pending" | "active" | "archived"
+  week_start_date: string;
+  status: string;
   week_label: string | null;
   archived_at: string | null;
   created_at: string;
-}
-
-export function getArchivedSchedules(userId: number): Promise<ScheduleRecord[]> {
-  return apiFetch(`/schedules/${userId}/archived`);
-}
-
-export function getArchivedWeekBlocks(userId: number, weekStart: string): Promise<ScheduleBlock[]> {
-  return apiFetch(`/schedules/week/${userId}/${weekStart}`);
-}
-
-export function deleteArchivedSchedule(scheduleId: number): Promise<void> {
-  return apiFetch(`/schedules/${scheduleId}`, { method: "DELETE" });
 }
 
 export interface CompletionRecord {
@@ -245,14 +146,165 @@ export interface CompletionRecord {
   created_at: string;
 }
 
-export function getCompletions(userId: number): Promise<CompletionRecord[]> {
-  return apiFetch(`/completions/${userId}`);
+// ── Core fetch ────────────────────────────────────────────────────────────────
+
+async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getToken();
+  const url   = `${BASE}${path}`;
+  console.log("[API] →", url);
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options?.headers ?? {}),
+    },
+  });
+  console.log("[API] ←", res.status, url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
 }
 
-export function getAllTasks(userId: number): Promise<Task[]> {
-  return apiFetch(`/tasks/${userId}`);
+// ── Schedule blocks ───────────────────────────────────────────────────────────
+
+export function getTodaySchedule(date: string): Promise<ScheduleBlock[]> {
+  return apiFetch(`/schedule/day/${date}`);
 }
 
-export function getAllSchedules(userId: number): Promise<ScheduleRecord[]> {
-  return apiFetch(`/schedules/${userId}/all`);
+export function getWeekSchedule(weekStart: string): Promise<ScheduleBlock[]> {
+  return apiFetch(`/schedule/week/${weekStart}`);
+}
+
+export function updateBlockStatus(blockId: number, status: string): Promise<ScheduleBlock> {
+  return apiFetch(`/schedule/block/${blockId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function reorganize(reason = "manual"): Promise<ReorganizeResult> {
+  return apiFetch("/schedule/reorganize", {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function reorganizeMissed(missedBlockId: number): Promise<RescheduleResult> {
+  return apiFetch("/schedule/reorganize", {
+    method: "POST",
+    body: JSON.stringify({ missed_block_id: missedBlockId, reason: "missed" }),
+  });
+}
+
+export function generateSchedule(
+  weekStart: string,
+  generationTimestamp?: string,
+  weekTarget: "current" | "next" = "current",
+): Promise<GenerateResult> {
+  return apiFetch("/schedule/generate", {
+    method: "POST",
+    body: JSON.stringify({
+      week_start_date: weekStart,
+      ...(generationTimestamp ? { generation_timestamp: generationTimestamp } : {}),
+      week_target: weekTarget,
+    }),
+  });
+}
+
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+
+export function updateTaskStatus(taskId: number, status: string): Promise<Task> {
+  return apiFetch(`/tasks/${taskId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function getRecentTasks(): Promise<Task[]> {
+  return apiFetch("/tasks/recent");
+}
+
+export function getAllTasks(): Promise<Task[]> {
+  return apiFetch("/tasks/");
+}
+
+export interface TaskCreatePayload {
+  title: string;
+  duration_minutes: number;
+  deadline: null;
+  priority: string;
+  energy_level: string;
+  is_flexible: boolean;
+  timing_preference?: string;
+  preferred_days?: string | null;
+  fixed_start_time?: string | null;
+  fixed_end_time?: string | null;
+  commute_minutes?: number;
+  is_recurring?: boolean;
+}
+
+export function createTask(data: TaskCreatePayload): Promise<Task> {
+  return apiFetch("/tasks/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+// ── Preferences ───────────────────────────────────────────────────────────────
+
+export function savePreferences(
+  data: Omit<WeeklyPreferences, "id" | "user_id" | "created_at">
+): Promise<WeeklyPreferences> {
+  return apiFetch("/preferences/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function getPreferences(): Promise<WeeklyPreferences> {
+  return apiFetch("/preferences/current");
+}
+
+export function getLatestPreferences(): Promise<WeeklyPreferences> {
+  return apiFetch("/preferences/latest");
+}
+
+// ── Locations ─────────────────────────────────────────────────────────────────
+
+export function getSavedLocations(): Promise<UserLocation[]> {
+  return apiFetch("/locations/");
+}
+
+export function saveLocation(data: { name: string; commute_minutes: number }): Promise<UserLocation> {
+  return apiFetch("/locations/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+// ── Schedules (archive / lifecycle) ──────────────────────────────────────────
+
+export function getArchivedSchedules(): Promise<ScheduleRecord[]> {
+  return apiFetch("/schedules/archived");
+}
+
+export function getArchivedWeekBlocks(weekStart: string): Promise<ScheduleBlock[]> {
+  return apiFetch(`/schedules/week/${weekStart}`);
+}
+
+export function deleteArchivedSchedule(scheduleId: number): Promise<void> {
+  return apiFetch(`/schedules/${scheduleId}`, { method: "DELETE" });
+}
+
+export function getAllSchedules(): Promise<ScheduleRecord[]> {
+  return apiFetch("/schedules/all");
+}
+
+// ── Completions ───────────────────────────────────────────────────────────────
+
+export function getCompletions(): Promise<CompletionRecord[]> {
+  return apiFetch("/completions/");
 }

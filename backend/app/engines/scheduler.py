@@ -683,6 +683,35 @@ def generate_weekly_schedule(
             print(f"[scheduler] fill_remaining_with='{_fill_target_title}' "
                   f"but no matching task found")
 
+    # ── Deep work blocks — fill remaining free slots when enabled ────────────
+    dw_enabled: bool = bool(p("deep_work_enabled", False))
+    if dw_enabled:
+        dw_session_mins: int = int(p("deep_work_session_duration", 120))
+        dw_slots = slots_needed(dw_session_mins)
+        LATE_CUTOFF = time_to_slot("21:00")  # never schedule deep work at or after 21:00
+        MAX_DW_PER_DAY = 4
+        print(f"[scheduler] Deep work enabled — session {dw_session_mins} min ({dw_slots} slots)")
+
+        for day_idx in range(7):
+            day_date = week_start_date + timedelta(days=day_idx)
+            if day_date < schedule_start_date:
+                continue
+            dw_day_count = 0
+            scan_from = wake_slot + routine_slots
+            while dw_day_count < MAX_DW_PER_DAY:
+                ts = find_free_slot(
+                    time_map, day_idx, dw_slots,
+                    start_from=scan_from,
+                    end_before=min(LATE_CUTOFF, night_routine_start),
+                )
+                if ts is None:
+                    break
+                mark_occupied(time_map, day_idx, ts, dw_slots)
+                blocks.append(_block(user_id, day_date, "deep_work", "Deep Work",
+                                     ts, dw_slots))
+                dw_day_count += 1
+                scan_from = ts + dw_slots
+
     is_overloaded = bool(unscheduled_tasks)
 
     # ── Step 4: Save to database ──────────────────────────────────────────────

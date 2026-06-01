@@ -40,5 +40,8 @@ class Task(Base):
     # task title that displaced this task (cascade tracking)
     bumped_from = Column(String, nullable=True)
 
+    # Recurring tasks carry over automatically each week
+    is_recurring = Column(Boolean, nullable=False, default=False)
+
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

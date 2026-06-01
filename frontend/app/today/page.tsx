@@ -4,8 +4,8 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock, TrendingUp, Zap, Sun, Moon } from "lucide-react";
 import BlockCard from "@/components/BlockCard";
 import { getTodaySchedule, updateTaskStatus, updateBlockStatus, reorganize, reorganizeMissed, ScheduleBlock } from "@/lib/api";
-
-const USER_ID = 1;
+import { useAuth } from "@/contexts/AuthContext";
+import { useRouter } from "next/navigation";
 
 function toLocalDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -115,6 +115,13 @@ function getDayLabel(viewing: string, actual: string): string {
 }
 
 export default function TodayPage() {
+  const { user, isLoading: authLoading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [user, authLoading, router]);
+
   // Read date from URL ?date= param if present, else show today
   const [viewingDateStr, setViewingDateStr] = useState<string>(() => {
     if (typeof window !== "undefined") {
@@ -141,7 +148,7 @@ export default function TodayPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await getTodaySchedule(USER_ID, viewingDateStr);
+      const data = await getTodaySchedule(viewingDateStr);
       setBlocks(data);
       const completed = new Set<number>();
       const missed    = new Set<number>();
@@ -219,7 +226,7 @@ export default function TodayPage() {
       );
       await updateTaskStatus(taskId, "complete");
       setCompletedIds(prev => new Set(prev).add(blockId));
-      const r = await reorganize(USER_ID, "task_complete");
+      const r = await reorganize("task_complete");
       setOverloaded(r.is_overloaded);
     } else if (action === "skip") {
       updateBlockStatus(blockId, "skipped").catch(e =>
@@ -234,7 +241,7 @@ export default function TodayPage() {
       );
       await updateTaskStatus(taskId, "missed");
       try {
-        const result = await reorganizeMissed(USER_ID, blockId);
+        const result = await reorganizeMissed(blockId);
         if (result.rescheduled && result.new_date && result.new_start_time) {
           showToast(
             `${result.task_title} rescheduled to ${rescheduleDay(result.new_date)} at ${fmt12(result.new_start_time)}`

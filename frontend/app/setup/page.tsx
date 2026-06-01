@@ -2,12 +2,16 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { savePreferences, generateSchedule, createTask } from "@/lib/api";
+import {
+  savePreferences, generateSchedule, createTask,
+  getLatestPreferences, getRecentTasks,
+  getSavedLocations, saveLocation,
+  type WeeklyPreferences, type Task as ApiTask, type UserLocation,
+} from "@/lib/api";
 import Toggle from "@/components/Toggle";
+import { useAuth } from "@/contexts/AuthContext";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const USER_ID = 1;
 
 const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAYS_FULL  = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
@@ -49,6 +53,7 @@ interface WizardTask {
   fixed_start_time?: string;   // "HH:MM" 24h
   fixed_end_time?: string;     // "HH:MM" 24h
   commute_minutes: number;     // one-way, 0 = no travel
+  is_recurring?: boolean;
 }
 
 interface WizardData {
@@ -85,6 +90,9 @@ interface WizardData {
   breakfast_timing: MealTiming;
   lunch_timing:     MealTiming;
   dinner_timing:    MealTiming;
+  // Deep work preferences
+  deep_work_enabled: boolean;
+  deep_work_session_duration: number;
 }
 
 interface DraftState {
@@ -193,7 +201,60 @@ const DEFAULTS: WizardData = {
   breakfast_timing: "Normal",
   lunch_timing:     "Normal",
   dinner_timing:    "Normal",
+  deep_work_enabled: false,
+  deep_work_session_duration: 120,
 };
+
+// ─── Last-week helpers ────────────────────────────────────────────────────────
+
+function prefsToWizardData(prefs: WeeklyPreferences): Partial<WizardData> {
+  return {
+    preferred_bedtime:        prefs.preferred_bedtime,
+    preferred_wake_time:      prefs.preferred_wake_time,
+    sleep_target_hours:       prefs.sleep_target_hours,
+    morning_routine_mins:     prefs.morning_routine_mins,
+    night_routine_mins:       prefs.night_routine_mins,
+    shower_preference:        prefs.shower_preference as ShowerPref,
+    shower_mins:              prefs.shower_mins,
+    meals_per_day:            prefs.meals_per_day,
+    meal_duration_mins:       prefs.meal_duration_mins,
+    meal_prep_days:           prefs.meal_prep_days,
+    gym_days_per_week:        prefs.gym_days_per_week,
+    gym_duration_mins:        prefs.gym_duration_mins,
+    muay_thai_days_per_week:  prefs.muay_thai_days_per_week,
+    muay_thai_duration_mins:  prefs.muay_thai_duration_mins,
+    workout_time_preference:  prefs.workout_time_preference as WorkoutTime,
+    is_remote:                prefs.is_remote,
+    work_location_name:       prefs.work_location_name ?? "",
+    commute_minutes:          prefs.commute_minutes,
+    work_days_per_week:       prefs.work_days_per_week,
+    weekly_task_capacity_hours: prefs.weekly_task_capacity_hours,
+    energy_preference:        prefs.energy_preference as EnergyPref,
+    extra_context:            prefs.extra_context ?? "",
+    deep_work_enabled:        prefs.deep_work_enabled,
+    deep_work_session_duration: prefs.deep_work_session_duration,
+  };
+}
+
+function apiTaskToWizardTask(t: ApiTask, idx: number): WizardTask {
+  let preferred_days: string[] = [];
+  try {
+    if (t.preferred_days) preferred_days = JSON.parse(t.preferred_days);
+  } catch { /* ignore */ }
+  return {
+    id: `last-${t.id}-${idx}`,
+    title: t.title,
+    duration_minutes: t.duration_minutes,
+    priority: (t.priority as Priority) ?? "medium",
+    timing_preference: (t.timing_preference as TimingPref) ?? "ai_decide",
+    preferred_days,
+    is_flexible: t.is_flexible,
+    fixed_start_time: t.fixed_start_time ?? undefined,
+    fixed_end_time:   t.fixed_end_time   ?? undefined,
+    commute_minutes:  t.commute_minutes  ?? 0,
+    is_recurring:     t.is_recurring,
+  };
+}
 
 // ─── UI Primitives ────────────────────────────────────────────────────────────
 
@@ -437,13 +498,46 @@ function StepShell({ headline, subtext, children }: {
 
 // ─── MODE SCREEN ──────────────────────────────────────────────────────────────
 
-function ModeScreen({ onSelect, weekTarget, setWeekTarget }: {
+function ModeScreen({ onSelect, weekTarget, setWeekTarget, lastWeekPrefs, lastWeekTasks, onUseLastWeekAsTemplate, onSameAsLastWeek }: {
   onSelect: (m: Mode) => void;
   weekTarget: "current" | "next";
   setWeekTarget: (t: "current" | "next") => void;
+  lastWeekPrefs?: WeeklyPreferences | null;
+  lastWeekTasks?: ApiTask[] | null;
+  onUseLastWeekAsTemplate?: () => void;
+  onSameAsLastWeek?: () => void;
 }) {
   return (
     <div className="w-full max-w-lg mx-auto fade-in">
+      {/* Last week summary card */}
+      {lastWeekPrefs && (
+        <div className="mb-6 bg-indigo-50 border border-indigo-100 rounded-2xl p-5">
+          <p className="text-[12px] font-semibold text-indigo-500 uppercase tracking-widest mb-3">From last week</p>
+          <div className="grid grid-cols-2 gap-2 mb-4 text-[13px] text-gray-700">
+            <span>Sleep: {lastWeekPrefs.preferred_wake_time} – {lastWeekPrefs.preferred_bedtime}</span>
+            <span>Meals: {lastWeekPrefs.meals_per_day}/day</span>
+            <span>Gym: {lastWeekPrefs.gym_days_per_week}× / MT: {lastWeekPrefs.muay_thai_days_per_week}×</span>
+            {lastWeekTasks && <span>Tasks: {lastWeekTasks.length}</span>}
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onUseLastWeekAsTemplate}
+              className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+            >
+              Use last week as template
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelect("manual")}
+              className="flex-1 py-2.5 rounded-xl text-[13px] font-medium border border-indigo-200 text-indigo-600 hover:bg-indigo-100 transition-colors"
+            >
+              Start fresh
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Week selector */}
       <div className="mb-8">
         <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3 text-center">
@@ -495,13 +589,27 @@ function ModeScreen({ onSelect, weekTarget, setWeekTarget }: {
           <button key={opt.mode} type="button" onClick={() => onSelect(opt.mode)}
             className="p-6 rounded-2xl border-2 border-gray-200 bg-white text-left hover:border-indigo-600 hover:bg-indigo-50 transition-all group">
             <div className="text-3xl mb-4">{opt.emoji}</div>
-            <div className="text-[17px] font-semibold text-gray-900 mb-2 group-hover:text-gray-900">
-              {opt.label}
+            <div className="text-[17px] font-semibold text-gray-900 mb-2 group-hover:text-gray-900">{opt.label}
             </div>
             <div className="text-[14px] text-gray-500 leading-relaxed">{opt.desc}</div>
           </button>
         ))}
       </div>
+
+      {/* Same as last week */}
+      {lastWeekPrefs && onSameAsLastWeek && (
+        <div className="mt-6 text-center">
+          <button
+            type="button"
+            onClick={onSameAsLastWeek}
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border-2 border-gray-200 text-[14px] font-semibold text-gray-700 hover:border-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 transition-all"
+          >
+            <span>⚡</span>
+            <span>Same as last week</span>
+          </button>
+          <p className="text-[12px] text-gray-400 mt-2">Copies settings and recurring tasks, generates immediately.</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -851,21 +959,38 @@ function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
 
 // ─── TASKS STEP ───────────────────────────────────────────────────────────────
 
-function DraftTaskForm({ onAdd, onCancel, mode }: {
+function DraftTaskForm({ onAdd, onUpdate, onCancel, mode, initialTask, savedLocations }: {
   onAdd: (t: WizardTask) => void;
+  onUpdate?: (t: WizardTask) => void;
   onCancel: () => void;
   mode?: Mode | null;
+  initialTask?: WizardTask;
+  savedLocations?: UserLocation[];
 }) {
-  const [title,        setTitle]       = useState("");
-  const [duration,     setDuration]    = useState(30);
-  const [priority,     setPriority]    = useState<Priority>("medium");
-  const [timingMode,   setTimingMode]  = useState<"ai" | "manual" | "fixed">("ai");
-  const [timeOfDay,    setTimeOfDay]   = useState<"" | "morning" | "afternoon" | "evening">("");
-  const [prefDays,     setPrefDays]    = useState<string[]>([]);
-  const [fixedStart,   setFixedStart]  = useState("09:00");
-  const [fixedEnd,     setFixedEnd]    = useState("17:00");
-  const [hasCommute,   setHasCommute]  = useState(false);
-  const [commuteMins,  setCommuteMins] = useState(30);
+  const isEditMode = Boolean(initialTask && onUpdate);
+
+  // Derive initial timingMode from initialTask
+  const initTimingMode: "ai" | "manual" | "fixed" = initialTask
+    ? (!initialTask.is_flexible && initialTask.fixed_start_time ? "fixed"
+      : initialTask.timing_preference && initialTask.timing_preference !== "ai_decide" ? "manual"
+      : "ai")
+    : "ai";
+  const initTimeOfDay: "" | "morning" | "afternoon" | "evening" =
+    (initialTask?.timing_preference && ["morning","afternoon","evening"].includes(initialTask.timing_preference)
+      ? initialTask.timing_preference as "morning" | "afternoon" | "evening"
+      : "");
+
+  const [title,        setTitle]       = useState(initialTask?.title ?? "");
+  const [duration,     setDuration]    = useState(initialTask?.duration_minutes ?? 30);
+  const [priority,     setPriority]    = useState<Priority>(initialTask?.priority ?? "medium");
+  const [timingMode,   setTimingMode]  = useState<"ai" | "manual" | "fixed">(initTimingMode);
+  const [timeOfDay,    setTimeOfDay]   = useState<"" | "morning" | "afternoon" | "evening">(initTimeOfDay);
+  const [prefDays,     setPrefDays]    = useState<string[]>(initialTask?.preferred_days ?? []);
+  const [fixedStart,   setFixedStart]  = useState(initialTask?.fixed_start_time ?? "09:00");
+  const [fixedEnd,     setFixedEnd]    = useState(initialTask?.fixed_end_time   ?? "17:00");
+  const [hasCommute,   setHasCommute]  = useState((initialTask?.commute_minutes ?? 0) > 0);
+  const [commuteMins,  setCommuteMins] = useState(initialTask?.commute_minutes && initialTask.commute_minutes > 0 ? initialTask.commute_minutes : 30);
+  const [locationName, setLocationName] = useState("");
 
   const togglePrefDay = (full: string) =>
     setPrefDays(d => d.includes(full) ? d.filter(x => x !== full) : [...d, full]);
@@ -890,9 +1015,10 @@ function DraftTaskForm({ onAdd, onCancel, mode }: {
 
   const handleAdd = () => {
     if (!canAdd) return;
+    let task: WizardTask;
     if (timingMode === "fixed") {
-      onAdd({
-        id: `${Date.now()}-${Math.random()}`,
+      task = {
+        id: initialTask?.id ?? `${Date.now()}-${Math.random()}`,
         title: title.trim(),
         duration_minutes: fixedDurationMins,
         priority,
@@ -902,12 +1028,13 @@ function DraftTaskForm({ onAdd, onCancel, mode }: {
         fixed_start_time: fixedStart,
         fixed_end_time: fixedEnd,
         commute_minutes: hasCommute ? commuteMins : 0,
-      });
+        is_recurring: initialTask?.is_recurring ?? false,
+      };
     } else {
       const timingPref: TimingPref =
         timingMode === "ai" ? "ai_decide" : (timeOfDay || "ai_decide") as TimingPref;
-      onAdd({
-        id: `${Date.now()}-${Math.random()}`,
+      task = {
+        id: initialTask?.id ?? `${Date.now()}-${Math.random()}`,
         title: title.trim(),
         duration_minutes: duration,
         priority,
@@ -915,7 +1042,13 @@ function DraftTaskForm({ onAdd, onCancel, mode }: {
         preferred_days: timingMode === "manual" ? prefDays : [],
         is_flexible: true,
         commute_minutes: hasCommute ? commuteMins : 0,
-      });
+        is_recurring: initialTask?.is_recurring ?? false,
+      };
+    }
+    if (isEditMode && onUpdate) {
+      onUpdate(task);
+    } else {
+      onAdd(task);
     }
   };
 
@@ -1081,14 +1214,47 @@ function DraftTaskForm({ onAdd, onCancel, mode }: {
             <Toggle checked={hasCommute} onChange={setHasCommute} />
           </div>
           {hasCommute && (
-            <div className="mt-3 fade-in">
-              <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">
-                Commute each way
-              </p>
-              <HrMinInput value={commuteMins} onChange={setCommuteMins} />
-              <p className="text-[12px] text-gray-400 mt-1.5">
-                Sunday adds {fmtTaskDuration(commuteMins * 2)} total travel time around this task
-              </p>
+            <div className="mt-3 fade-in space-y-3">
+              {savedLocations && savedLocations.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-1.5">Saved locations</p>
+                  <div className="flex flex-wrap gap-2">
+                    {savedLocations.map(loc => (
+                      <button
+                        key={loc.id}
+                        type="button"
+                        onClick={() => { setCommuteMins(loc.commute_minutes); setLocationName(loc.name); }}
+                        className={`px-3 py-1.5 rounded-full text-[12px] font-medium border transition-all ${
+                          locationName === loc.name
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-white text-gray-600 border-gray-200 hover:border-indigo-400"
+                        }`}
+                      >
+                        {loc.name} · {loc.commute_minutes}m
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">
+                  Commute each way
+                </p>
+                <HrMinInput value={commuteMins} onChange={setCommuteMins} />
+                <p className="text-[12px] text-gray-400 mt-1.5">
+                  Sunday adds {fmtTaskDuration(commuteMins * 2)} total travel time around this task
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-1.5">Location name <span className="normal-case font-normal">(optional)</span></p>
+                <input
+                  type="text"
+                  placeholder="e.g. Gym, Office"
+                  value={locationName}
+                  onChange={e => setLocationName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-[13px] text-gray-900 bg-white focus:outline-none focus:border-indigo-300"
+                />
+              </div>
             </div>
           )}
         </div>
@@ -1098,11 +1264,59 @@ function DraftTaskForm({ onAdd, onCancel, mode }: {
       <div className="flex gap-2 pt-1">
         <button type="button" onClick={handleAdd} disabled={!canAdd}
           className="flex-1 py-3 rounded-xl text-[14px] font-semibold bg-indigo-600 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors">
-          Add task
+          {isEditMode ? "Update task" : "Add task"}
         </button>
         <button type="button" onClick={onCancel}
           className="px-5 py-3 rounded-xl text-[14px] text-gray-500 border border-gray-200 hover:border-gray-400 transition-colors">
           Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Suggestion Card ──────────────────────────────────────────────────────────
+
+function SuggestionCard({ task, onAdd, onEdit, onDismiss }: {
+  task: WizardTask;
+  onAdd: () => void;
+  onEdit: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3">
+      <div className="flex-1 min-w-0">
+        <div className="text-[14px] font-medium text-gray-900 truncate">{task.title}</div>
+        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+          <span className="text-[12px] text-gray-500">{fmtDuration(task.duration_minutes)}</span>
+          <span className="text-[12px] text-gray-300">·</span>
+          <span className="text-[12px] text-gray-500 capitalize">{task.priority}</span>
+          {task.commute_minutes > 0 && (
+            <>
+              <span className="text-[12px] text-gray-300">·</span>
+              <span className="text-[12px] text-gray-500">🚗 +{fmtDuration(task.commute_minutes * 2)}</span>
+            </>
+          )}
+          {!task.is_flexible && task.fixed_start_time && (
+            <>
+              <span className="text-[12px] text-gray-300">·</span>
+              <span className="text-[12px] text-gray-500">📌 {fmt12(task.fixed_start_time)}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <button type="button" onClick={onAdd}
+          className="px-2.5 py-1.5 rounded-lg text-[12px] font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors">
+          + Add
+        </button>
+        <button type="button" onClick={onEdit}
+          className="px-2.5 py-1.5 rounded-lg text-[12px] font-medium border border-gray-200 text-gray-600 hover:border-gray-400 bg-white transition-colors">
+          Edit
+        </button>
+        <button type="button" onClick={onDismiss}
+          className="text-gray-300 hover:text-gray-600 transition-colors text-xl leading-none ml-1">
+          ×
         </button>
       </div>
     </div>
@@ -1239,10 +1453,17 @@ function AIQuickPrefs({ data, set }: {
 
 // ─── TASKS STEP ───────────────────────────────────────────────────────────────
 
-function TasksStep({ data, set, mode }: {
+function TasksStep({ data, set, mode, suggestions, dismissedSuggestions, onDismissSuggestion, onEditSuggestion, onEditTask, savedLocations, preFilledBanner }: {
   data: WizardData;
   set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void;
   mode?: Mode | null;
+  suggestions?: WizardTask[];
+  dismissedSuggestions?: Set<string>;
+  onDismissSuggestion?: (id: string) => void;
+  onEditSuggestion?: (t: WizardTask) => void;
+  onEditTask?: (t: WizardTask) => void;
+  savedLocations?: UserLocation[];
+  preFilledBanner?: boolean;
 }) {
   const [showForm, setShowForm] = useState(false);
 
@@ -1255,18 +1476,61 @@ function TasksStep({ data, set, mode }: {
     set("tasks", data.tasks.filter(t => t.id !== id));
   };
 
+  const toggleRecurring = (id: string) => {
+    set("tasks", data.tasks.map(t =>
+      t.id === id ? { ...t, is_recurring: !t.is_recurring } : t
+    ));
+  };
+
+  // Filter suggestions: exclude optional, tasks with deadline, dismissed, and already in list
+  const existingTitles = new Set(data.tasks.map(t => t.title.toLowerCase()));
+  const visibleSuggestions = (suggestions ?? []).filter(s =>
+    s.priority !== "optional" &&
+    !dismissedSuggestions?.has(s.id) &&
+    !existingTitles.has(s.title.toLowerCase())
+  );
+
   return (
     <StepShell
       headline="What needs to get done?"
       subtext="Add everything on your plate. Sunday will fit it into your schedule."
     >
+      {/* Pre-filled banner */}
+      {preFilledBanner && (
+        <div className="mb-5 flex items-center gap-2 px-4 py-2.5 bg-green-50 border border-green-100 rounded-xl text-[13px] text-green-700 font-medium fade-in">
+          <span>✓</span>
+          <span>Pre-filled from last week — adjust anything below</span>
+        </div>
+      )}
+
       {/* AI mode quick preferences */}
       {mode === "ai" && <AIQuickPrefs data={data} set={set} />}
+
+      {/* Suggestions from last week */}
+      {visibleSuggestions.length > 0 && (
+        <div className="mb-5">
+          <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">From last week</p>
+          <div className="space-y-2">
+            {visibleSuggestions.map(s => (
+              <SuggestionCard
+                key={s.id}
+                task={s}
+                onAdd={() => {
+                  set("tasks", [...data.tasks, { ...s, id: `added-${Date.now()}-${Math.random()}` }]);
+                }}
+                onEdit={() => onEditSuggestion?.(s)}
+                onDismiss={() => onDismissSuggestion?.(s.id)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Task list */}
       {data.tasks.length > 0 && (
         <div className="space-y-2 mb-5">
           {data.tasks.map(task => (
-            <div key={task.id} className="flex items-center gap-3 bg-white rounded-xl border border-gray-100 px-4 py-3">
+            <div key={task.id} className="flex items-center gap-2 bg-white rounded-xl border border-gray-100 px-4 py-3">
               <div className="flex-1 min-w-0">
                 <div className="text-[14px] font-medium text-gray-900 truncate">{task.title}</div>
                 <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
@@ -1287,6 +1551,20 @@ function TasksStep({ data, set, mode }: {
                   </span>
                 </div>
               </div>
+              {/* Recurring toggle */}
+              <button
+                type="button"
+                onClick={() => toggleRecurring(task.id)}
+                title={task.is_recurring ? "Recurring — click to disable" : "Click to make recurring"}
+                className={`text-sm leading-none transition-colors shrink-0 ${task.is_recurring ? "text-indigo-500" : "text-gray-300 hover:text-gray-500"}`}
+              >
+                ↻
+              </button>
+              {/* Edit button */}
+              <button type="button" onClick={() => onEditTask?.(task)}
+                className="text-gray-300 hover:text-gray-600 transition-colors text-sm leading-none shrink-0">
+                ✏
+              </button>
               <button type="button" onClick={() => removeTask(task.id)}
                 className="text-gray-300 hover:text-gray-600 transition-colors text-xl leading-none shrink-0">
                 ×
@@ -1297,7 +1575,7 @@ function TasksStep({ data, set, mode }: {
       )}
 
       {/* Empty state */}
-      {data.tasks.length === 0 && !showForm && (
+      {data.tasks.length === 0 && !showForm && visibleSuggestions.length === 0 && (
         <div className="py-12 text-center border-2 border-dashed border-gray-100 rounded-2xl mb-5">
           <p className="text-[15px] text-gray-400 mb-1">No tasks yet</p>
           <p className="text-[13px] text-gray-300">Add at least one to continue</p>
@@ -1307,7 +1585,7 @@ function TasksStep({ data, set, mode }: {
       {/* Draft form */}
       {showForm && (
         <div className="mb-4 fade-in">
-          <DraftTaskForm onAdd={addTask} onCancel={() => setShowForm(false)} mode={mode} />
+          <DraftTaskForm onAdd={addTask} onCancel={() => setShowForm(false)} mode={mode} savedLocations={savedLocations} />
         </div>
       )}
 
@@ -1378,6 +1656,42 @@ function ReviewStep({ data, set, mode, weekTarget }: {
       headline="Your week, by the numbers."
       subtext={`${mode === "ai" ? "Review your tasks" : "Review all your settings"} before Sunday builds your schedule.`}
     >
+      {/* Deep work toggle */}
+      <div className="mb-7 bg-white rounded-2xl border border-gray-100 p-5">
+        <div className="flex items-center gap-3 mb-1">
+          <span className="text-xl">🧠</span>
+          <div className="flex-1">
+            <p className="text-[15px] font-semibold text-gray-900">Fill free time with deep work</p>
+            <p className="text-[13px] text-gray-500">Sunday fills your free slots automatically.</p>
+          </div>
+          <Toggle
+            checked={data.deep_work_enabled}
+            onChange={v => set("deep_work_enabled", v)}
+          />
+        </div>
+        {data.deep_work_enabled && (
+          <div className="mt-4 fade-in">
+            <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Session duration</p>
+            <div className="flex gap-2 flex-wrap">
+              {[60, 90, 120, 180].map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => set("deep_work_session_duration", m)}
+                  className={`px-4 py-2 rounded-full text-[13px] font-medium border transition-all ${
+                    data.deep_work_session_duration === m
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                  }`}
+                >
+                  {m < 60 ? `${m} min` : `${m / 60}h`}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       {weekTarget === "next" && (
         <div className="mb-5 flex items-center gap-2 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-[13px] text-indigo-600 font-medium">
           <span>✦</span>
@@ -1531,6 +1845,13 @@ function getFollowingMonday(): Date {
 }
 
 export default function SetupPage() {
+  const { user, isLoading: authLoading } = useAuth();
+  const authRouter = useRouter();
+
+  useEffect(() => {
+    if (!authLoading && !user) authRouter.replace("/login");
+  }, [user, authLoading, authRouter]);
+
   const [mode,          setMode]          = useState<Mode | null>(null);
   const [step,          setStep]          = useState(1);
   const [direction,     setDirection]     = useState<1 | -1>(1);
@@ -1543,7 +1864,24 @@ export default function SetupPage() {
   const [draft,         setDraft]         = useState<DraftState | null>(null);
   const [draftChecked,  setDraftChecked]  = useState(false);
 
+  // Last-week data
+  const [lastWeekPrefs,      setLastWeekPrefs]      = useState<WeeklyPreferences | null>(null);
+  const [lastWeekTasks,      setLastWeekTasks]      = useState<ApiTask[] | null>(null);
+  const [preFilledFromLastWeek, setPreFilledFromLastWeek] = useState(false);
+
+  // Suggestion / edit state
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+  const [editingTask,    setEditingTask]    = useState<WizardTask | null>(null);
+  const [editingSuggestion, setEditingSuggestion] = useState<WizardTask | null>(null);
+
+  // Locations
+  const [savedLocations, setSavedLocations] = useState<UserLocation[]>([]);
+
+  // One-tap generation
+  const [generatingDirectly, setGeneratingDirectly] = useState(false);
+
   // On mount: check for saved draft, then fall back to ?step= / ?week= query params
+  // Also load last-week data and saved locations
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
 
@@ -1551,6 +1889,17 @@ export default function SetupPage() {
     if (params.get("week") === "next") {
       setWeekTarget("next");
     }
+
+    // Load last-week prefs and tasks in parallel (non-blocking)
+    Promise.all([
+      getLatestPreferences().catch(() => null),
+      getRecentTasks().catch(() => null),
+      getSavedLocations().catch(() => [] as UserLocation[]),
+    ]).then(([prefs, tasks, locs]) => {
+      if (prefs) setLastWeekPrefs(prefs);
+      if (tasks) setLastWeekTasks(tasks);
+      if (locs) setSavedLocations(locs as UserLocation[]);
+    });
 
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
@@ -1624,6 +1973,42 @@ export default function SetupPage() {
     setDirection(1);
   }
 
+  function handleUseLastWeekAsTemplate() {
+    if (!lastWeekPrefs) return;
+    const prefill = prefsToWizardData(lastWeekPrefs);
+    const tasks: WizardTask[] = (lastWeekTasks ?? [])
+      .filter(t => t.priority !== "optional" && !t.deadline)
+      .map((t, i) => apiTaskToWizardTask(t, i));
+    setData(prev => ({ ...prev, ...prefill, tasks }));
+    setPreFilledFromLastWeek(true);
+    setMode("manual");
+    setStep(4);
+    setDirection(1);
+  }
+
+  async function handleSameAsLastWeek() {
+    if (!lastWeekPrefs) return;
+    const prefill = prefsToWizardData(lastWeekPrefs);
+    const tasks: WizardTask[] = (lastWeekTasks ?? [])
+      .filter(t => t.is_recurring)
+      .map((t, i) => apiTaskToWizardTask(t, i));
+    const genData = { ...DEFAULTS, ...prefill, tasks };
+    setData(genData);
+    setMode("manual");
+    setGeneratingDirectly(true);
+    setErrMsg(null);
+    setLoadingMsgIdx(0);
+    try {
+      await runGenerate(genData, "manual");
+      setGeneratingDirectly(false);
+      setDone(true);
+    } catch (e) {
+      console.error("[Sunday] Same-as-last-week generation failed:", e);
+      setErrMsg("Could not reach Sunday's server. Please try again.");
+      setGeneratingDirectly(false);
+    }
+  }
+
   function goNext() {
     setDirection(1);
     setStep(s => s + 1);
@@ -1644,17 +2029,44 @@ export default function SetupPage() {
   const isLastStep   = step === TOTAL;
   const canContinue  = step !== tasksStepNum || data.tasks.length > 0;
 
+  // Compute suggestions from lastWeekTasks
+  const suggestions: WizardTask[] = (lastWeekTasks ?? [])
+    .filter(t =>
+      t.priority !== "optional" &&
+      !t.deadline &&
+      t.status !== "missed"
+    )
+    .map((t, i) => apiTaskToWizardTask(t, i))
+    .sort((a, b) => {
+      const fixed = (t: WizardTask) => (!t.is_flexible && t.fixed_start_time ? 0 : 1);
+      const prio = (t: WizardTask) => ({ critical: 0, high: 1, medium: 2, low: 3, optional: 4 }[t.priority] ?? 5);
+      return fixed(a) - fixed(b) || prio(a) - prio(b);
+    });
+
   function renderStep() {
     const props = { data, set };
+    const tasksStepProps = {
+      ...props,
+      mode,
+      suggestions,
+      dismissedSuggestions,
+      onDismissSuggestion: (id: string) =>
+        setDismissedSuggestions(prev => new Set(Array.from(prev).concat(id))),
+      onEditSuggestion: (t: WizardTask) => setEditingSuggestion(t),
+      onEditTask: (t: WizardTask) => setEditingTask(t),
+      savedLocations,
+      preFilledBanner: preFilledFromLastWeek,
+    };
+
     if (mode === "manual") {
       if (step === 1) return <Step1 {...props} />;
       if (step === 2) return <Step2 {...props} />;
       if (step === 3) return <Step3 {...props} />;
-      if (step === 4) return <TasksStep {...props} mode={mode} />;
+      if (step === 4) return <TasksStep {...tasksStepProps} />;
       if (step === 5) return <ReviewStep data={data} set={set} mode={mode} weekTarget={weekTarget} />;
     }
     if (mode === "ai") {
-      if (step === 1) return <TasksStep {...props} mode={mode} />;
+      if (step === 1) return <TasksStep {...tasksStepProps} />;
       if (step === 2) return <ReviewStep data={data} set={set} mode={mode} weekTarget={weekTarget} />;
     }
     return null;
@@ -1664,77 +2076,91 @@ export default function SetupPage() {
   const LUNCH_TIMES:     Record<MealTiming, string> = { Early: "11:30", Normal: "12:30", Late: "14:00" };
   const DINNER_TIMES:    Record<MealTiming, string> = { Early: "17:30", Normal: "19:00", Late: "20:30" };
 
+  async function runGenerate(genData: WizardData, genMode: Mode) {
+    const generationTimestamp = new Date().toISOString();
+    const weekStart = toLocalDateString(
+      weekTarget === "next" ? getFollowingMonday() : getCurrentMonday()
+    );
+    const serializedCommitments = genData.fixed_commitments.map(c =>
+      JSON.stringify({ name: c.name, time: c.time, duration: c.duration, days: c.days })
+    );
+    const effectiveMealsPerDay = genMode === "ai" ? genData.ai_meals_per_day : genData.meals_per_day;
+
+    await savePreferences({
+      week_start_date: weekStart,
+      sleep_target_hours: genData.sleep_target_hours,
+      preferred_bedtime: genData.preferred_bedtime,
+      preferred_wake_time: genData.preferred_wake_time,
+      morning_routine_mins: genData.morning_routine_mins,
+      night_routine_mins: genData.night_routine_mins,
+      shower_mins: genData.shower_mins,
+      shower_preference: genData.shower_preference,
+      meals_per_day: genMode === "ai" ? genData.ai_meals_per_day : genData.meals_per_day,
+      meal_duration_mins: genMode === "ai" ? genData.ai_meal_duration_mins : genData.meal_duration_mins,
+      meal_prep_days: genData.meal_prep_days,
+      gym_days_per_week: genData.gym_days_per_week,
+      gym_duration_mins: genData.gym_duration_mins,
+      muay_thai_days_per_week: genData.muay_thai_days_per_week,
+      muay_thai_duration_mins: genData.muay_thai_duration_mins,
+      workout_time_preference: genData.workout_time_preference,
+      commute_minutes: genMode === "ai"
+        ? (genData.ai_has_commute ? genData.ai_commute_mins : 0)
+        : (genData.is_remote ? 0 : genData.commute_minutes),
+      is_remote: genMode === "ai" ? !genData.ai_has_commute : genData.is_remote,
+      work_days_per_week: genMode === "ai" ? (genData.ai_has_commute ? 5 : 0) : genData.work_days_per_week,
+      work_location_name: genData.work_location_name || null,
+      weekly_task_capacity_hours: genData.weekly_task_capacity_hours,
+      energy_preference: genData.energy_preference,
+      fixed_commitments: serializedCommitments,
+      notes: null,
+      mode: genMode,
+      extra_context: genData.extra_context || null,
+      scheduling_notes: genData.extra_context || null,
+      meal_breakfast_time: BREAKFAST_TIMES[genData.breakfast_timing],
+      meal_lunch_time:     effectiveMealsPerDay >= 3 ? LUNCH_TIMES[genData.lunch_timing]  : null,
+      meal_dinner_time:    effectiveMealsPerDay >= 2 ? DINNER_TIMES[genData.dinner_timing] : null,
+      deep_work_enabled: genData.deep_work_enabled,
+      deep_work_session_duration: genData.deep_work_session_duration,
+    });
+
+    for (const task of genData.tasks) {
+      await createTask({
+        title: task.title,
+        duration_minutes: task.duration_minutes,
+        deadline: null,
+        priority: task.priority,
+        energy_level: "medium",
+        is_flexible: task.is_flexible ?? true,
+        timing_preference: task.timing_preference,
+        preferred_days: task.preferred_days.length > 0
+          ? JSON.stringify(task.preferred_days)
+          : null,
+        fixed_start_time: task.fixed_start_time ?? null,
+        fixed_end_time:   task.fixed_end_time   ?? null,
+        commute_minutes:  task.commute_minutes   ?? 0,
+        is_recurring:     task.is_recurring      ?? false,
+      });
+      // Save location name if task has commute and locationName
+    }
+
+    // Save any new locations from tasks that have a location name stored
+    for (const task of genData.tasks) {
+      if (task.commute_minutes && task.commute_minutes > 0) {
+        // We don't have locationName here, but locations are saved via onSaveLocation callback
+      }
+    }
+
+    await generateSchedule(weekStart, generationTimestamp, weekTarget);
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+  }
+
   async function handleGenerate() {
+    if (!mode) return;
     setGenerating(true);
     setErrMsg(null);
     setLoadingMsgIdx(0);
     try {
-      const generationTimestamp = new Date().toISOString();
-      const weekStart = toLocalDateString(
-        weekTarget === "next" ? getFollowingMonday() : getCurrentMonday()
-      );
-      const serializedCommitments = data.fixed_commitments.map(c =>
-        JSON.stringify({ name: c.name, time: c.time, duration: c.duration, days: c.days })
-      );
-      const effectiveMealsPerDay = mode === "ai" ? data.ai_meals_per_day : data.meals_per_day;
-
-      await savePreferences({
-        user_id: USER_ID,
-        week_start_date: weekStart,
-        sleep_target_hours: data.sleep_target_hours,
-        preferred_bedtime: data.preferred_bedtime,
-        preferred_wake_time: data.preferred_wake_time,
-        morning_routine_mins: data.morning_routine_mins,
-        night_routine_mins: data.night_routine_mins,
-        shower_mins: data.shower_mins,
-        shower_preference: data.shower_preference,
-        meals_per_day: mode === "ai" ? data.ai_meals_per_day : data.meals_per_day,
-        meal_duration_mins: mode === "ai" ? data.ai_meal_duration_mins : data.meal_duration_mins,
-        meal_prep_days: data.meal_prep_days,
-        gym_days_per_week: data.gym_days_per_week,
-        gym_duration_mins: data.gym_duration_mins,
-        muay_thai_days_per_week: data.muay_thai_days_per_week,
-        muay_thai_duration_mins: data.muay_thai_duration_mins,
-        workout_time_preference: data.workout_time_preference,
-        commute_minutes: mode === "ai"
-          ? (data.ai_has_commute ? data.ai_commute_mins : 0)
-          : (data.is_remote ? 0 : data.commute_minutes),
-        is_remote: mode === "ai" ? !data.ai_has_commute : data.is_remote,
-        work_days_per_week: mode === "ai" ? (data.ai_has_commute ? 5 : 0) : data.work_days_per_week,
-        work_location_name: data.work_location_name || null,
-        weekly_task_capacity_hours: data.weekly_task_capacity_hours,
-        energy_preference: data.energy_preference,
-        fixed_commitments: serializedCommitments,
-        notes: null,
-        mode: mode ?? "manual",
-        extra_context: data.extra_context || null,
-        scheduling_notes: data.extra_context || null,
-        meal_breakfast_time: BREAKFAST_TIMES[data.breakfast_timing],
-        meal_lunch_time:     effectiveMealsPerDay >= 3 ? LUNCH_TIMES[data.lunch_timing]  : null,
-        meal_dinner_time:    effectiveMealsPerDay >= 2 ? DINNER_TIMES[data.dinner_timing] : null,
-      });
-
-      for (const task of data.tasks) {
-        await createTask({
-          user_id: USER_ID,
-          title: task.title,
-          duration_minutes: task.duration_minutes,
-          deadline: null,
-          priority: task.priority,
-          energy_level: "medium",
-          is_flexible: task.is_flexible ?? true,
-          timing_preference: task.timing_preference,
-          preferred_days: task.preferred_days.length > 0
-            ? JSON.stringify(task.preferred_days)
-            : null,
-          fixed_start_time: task.fixed_start_time ?? null,
-          fixed_end_time:   task.fixed_end_time   ?? null,
-          commute_minutes:  task.commute_minutes   ?? 0,
-        });
-      }
-
-      await generateSchedule(USER_ID, weekStart, generationTimestamp, weekTarget);
-      try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+      await runGenerate(data, mode);
       setGenerating(false);
       setDone(true);
     } catch (e) {
@@ -1778,7 +2204,15 @@ export default function SetupPage() {
         ) : draft !== null && draftChecked ? (
           <DraftPrompt draft={draft} onResume={resumeDraft} onDiscard={discardDraft} />
         ) : mode === null ? (
-          <ModeScreen onSelect={selectMode} weekTarget={weekTarget} setWeekTarget={setWeekTarget} />
+          <ModeScreen
+            onSelect={selectMode}
+            weekTarget={weekTarget}
+            setWeekTarget={setWeekTarget}
+            lastWeekPrefs={lastWeekPrefs}
+            lastWeekTasks={lastWeekTasks}
+            onUseLastWeekAsTemplate={handleUseLastWeekAsTemplate}
+            onSameAsLastWeek={handleSameAsLastWeek}
+          />
         ) : (
           <div key={`${mode}-${step}`} className={`w-full ${animClass}`}>
             {renderStep()}
@@ -1813,6 +2247,61 @@ export default function SetupPage() {
               {errMsg}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Fullscreen overlay when generating directly (same-as-last-week) */}
+      {generatingDirectly && (
+        <div className="fixed inset-0 z-[80] bg-white flex flex-col items-center justify-center gap-5">
+          <div className="w-12 h-12 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin" />
+          <p className="text-[16px] font-medium text-gray-700">{LOADING_MESSAGES[loadingMsgIdx]}</p>
+        </div>
+      )}
+
+      {/* Edit existing task modal */}
+      {editingTask && (
+        <div className="fixed inset-0 z-[80] bg-black/30 flex items-end sm:items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-y-auto max-h-[90vh]">
+            <div className="p-5">
+              <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-4">Edit task</p>
+              <DraftTaskForm
+                key={editingTask.id}
+                initialTask={editingTask}
+                onAdd={() => {}}
+                onUpdate={(updated) => {
+                  set("tasks", data.tasks.map(t => t.id === updated.id ? updated : t));
+                  setEditingTask(null);
+                }}
+                onCancel={() => setEditingTask(null)}
+                mode={mode}
+                savedLocations={savedLocations}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit suggestion modal */}
+      {editingSuggestion && (
+        <div className="fixed inset-0 z-[80] bg-black/30 flex items-end sm:items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-y-auto max-h-[90vh]">
+            <div className="p-5">
+              <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-4">Edit before adding</p>
+              <DraftTaskForm
+                key={`suggestion-${editingSuggestion.id}`}
+                initialTask={editingSuggestion}
+                onAdd={(t) => {
+                  set("tasks", [...data.tasks, t]);
+                  setDismissedSuggestions(prev => new Set(Array.from(prev).concat(editingSuggestion.id)));
+                  setEditingSuggestion(null);
+                }}
+                onUpdate={() => {}}
+                onCancel={() => setEditingSuggestion(null)}
+                mode={mode}
+                savedLocations={savedLocations}
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

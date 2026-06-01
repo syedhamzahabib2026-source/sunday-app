@@ -9,8 +9,9 @@ import {
   updateBlockStatus, updateTaskStatus, reorganize, reorganizeMissed,
   ScheduleBlock, ScheduleRecord,
 } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
+import { useRouter } from "next/navigation";
 
-const USER_ID = 1;
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function toLocalDateString(d: Date): string {
@@ -54,6 +55,13 @@ function getNextMonday(): Date {
 }
 
 export default function WeekPage() {
+  const { user, isLoading: authLoading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [user, authLoading, router]);
+
   // Read ?preview=next from URL to auto-select next week view
   const [viewingNext, setViewingNext] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
@@ -86,20 +94,20 @@ export default function WeekPage() {
     let cancelled = false;
     setLoading(true); setError(null);
     const ws = viewingNext ? getNextMonday() : weekStart;
-    getWeekSchedule(USER_ID, toLocalDateString(ws))
+    getWeekSchedule(toLocalDateString(ws))
       .then(d => { if (!cancelled) { setBlocks(d); setLoading(false); } })
       .catch(e => { if (!cancelled) { setError(String(e)); setLoading(false); } });
     return () => { cancelled = true; };
   }, [weekStart, viewingNext]);
 
   useEffect(() => {
-    getArchivedSchedules(USER_ID).then(setArchivedSchedules).catch(() => {});
+    getArchivedSchedules().then(setArchivedSchedules).catch(() => {});
   }, []);
 
   function handleViewArchive(rec: ScheduleRecord) {
     setViewingArchive(rec);
     setArchiveLoading(true);
-    getArchivedWeekBlocks(USER_ID, rec.week_start_date)
+    getArchivedWeekBlocks(rec.week_start_date)
       .then(d => { setArchiveBlocks(d); setArchiveLoading(false); })
       .catch(() => setArchiveLoading(false));
   }
@@ -116,7 +124,7 @@ export default function WeekPage() {
     setDrawerDate(dateStr);
     setDrawerExpandedId(null);
     setDrawerLoading(true);
-    getTodaySchedule(1, dateStr).then(data => {
+    getTodaySchedule(dateStr).then(data => {
       setDrawerBlocks(data);
       const completed = new Set<number>();
       const missed    = new Set<number>();
@@ -143,18 +151,18 @@ export default function WeekPage() {
     if (action === "done") {
       await updateTaskStatus(taskId, "complete");
       setDrawerCompletedIds(p => new Set(p).add(blockId));
-      await reorganize(1, "task_complete");
+      await reorganize("task_complete");
     } else if (action === "skip") {
       await updateTaskStatus(taskId, "cancelled");
     } else if (action === "miss") {
       setDrawerMissedIds(p => new Set(p).add(blockId));
       await updateTaskStatus(taskId, "missed");
-      await reorganizeMissed(1, blockId);
+      await reorganizeMissed(blockId);
     }
     // Reload drawer + week
     if (drawerDate) openDrawer(drawerDate);
     const ws = toLocalDateString(weekStart);
-    getWeekSchedule(1, ws).then(setBlocks).catch(() => {});
+    getWeekSchedule(toLocalDateString(weekStart)).then(setBlocks).catch(() => {});
   }
 
   const displayWeekStart = viewingNext ? getNextMonday() : weekStart;

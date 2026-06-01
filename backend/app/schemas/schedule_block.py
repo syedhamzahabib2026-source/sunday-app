@@ -2,11 +2,10 @@ from datetime import datetime, date
 from typing import Literal, Optional
 from pydantic import BaseModel
 
-BlockType = Literal["task", "sleep", "meal", "commute", "gym", "muay_thai", "routine", "buffer", "event"]
+BlockType = Literal["task", "sleep", "meal", "commute", "gym", "muay_thai", "routine", "buffer", "event", "deep_work"]
 
 
 class ScheduleBlockCreate(BaseModel):
-    user_id: int
     task_id: Optional[int] = None
     block_type: BlockType
     title: str

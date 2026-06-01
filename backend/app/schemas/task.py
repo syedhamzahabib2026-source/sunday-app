@@ -8,7 +8,6 @@ StatusType = Literal["pending", "scheduled", "complete", "partial", "missed", "c
 
 
 class TaskCreate(BaseModel):
-    user_id: int
     title: str
     duration_minutes: int
     deadline: Optional[datetime] = None
@@ -21,6 +20,7 @@ class TaskCreate(BaseModel):
     fixed_start_time: Optional[str] = None   # "HH:MM" 24h — only for fixed tasks
     fixed_end_time:   Optional[str] = None   # "HH:MM" 24h
     commute_minutes:  Optional[int] = 0      # one-way travel time in minutes
+    is_recurring:     bool = False
 
 
 class TaskStatusUpdate(BaseModel):
@@ -45,6 +45,7 @@ class TaskResponse(BaseModel):
     commute_minutes:  Optional[int]
     original_priority: Optional[str]
     bumped_from: Optional[str]
+    is_recurring: bool
     created_at: datetime
     updated_at: datetime
 
