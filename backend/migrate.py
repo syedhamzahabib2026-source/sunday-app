@@ -70,7 +70,7 @@ def run_migrations() -> None:
     _add_column_if_missing("users", "avatar_url",           "VARCHAR")
     _add_column_if_missing("users", "google_access_token",  "TEXT")
     _add_column_if_missing("users", "google_refresh_token", "TEXT")
-    _add_column_if_missing("users", "google_token_expiry",  "DATETIME")
+    _add_column_if_missing("users", "google_token_expiry",  "TIMESTAMP")
 
     print("  [migrate] all migrations applied")
 
