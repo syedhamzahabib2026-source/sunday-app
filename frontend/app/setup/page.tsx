@@ -1883,6 +1883,7 @@ export default function SetupPage() {
   // On mount: check for saved draft, then fall back to ?step= / ?week= query params
   // Also load last-week data and saved locations
   useEffect(() => {
+    if (!user) return;
     const params = new URLSearchParams(window.location.search);
 
     // Apply ?week=next regardless of draft state
@@ -1923,7 +1924,7 @@ export default function SetupPage() {
     }
 
     setDraftChecked(true);
-  }, []);
+  }, [user]);
 
   // Debounced draft save — triggers on any data/mode/step change
   useEffect(() => {
@@ -2171,6 +2172,8 @@ export default function SetupPage() {
   }
 
   const animClass = direction === 1 ? "slide-enter-right" : "slide-enter-left";
+
+  if (authLoading || !user) return null;
 
   return (
     <div

@@ -91,6 +91,7 @@ export default function WeekPage() {
   const todayStr = toLocalDateString(new Date());
 
   useEffect(() => {
+    if (!user) { setLoading(false); return; }
     let cancelled = false;
     setLoading(true); setError(null);
     const ws = viewingNext ? getNextMonday() : weekStart;
@@ -98,11 +99,12 @@ export default function WeekPage() {
       .then(d => { if (!cancelled) { setBlocks(d); setLoading(false); } })
       .catch(e => { if (!cancelled) { setError(String(e)); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [weekStart, viewingNext]);
+  }, [weekStart, viewingNext, user]);
 
   useEffect(() => {
+    if (!user) return;
     getArchivedSchedules().then(setArchivedSchedules).catch(() => {});
-  }, []);
+  }, [user]);
 
   function handleViewArchive(rec: ScheduleRecord) {
     setViewingArchive(rec);
@@ -187,6 +189,8 @@ export default function WeekPage() {
     const partial = now.getHours() / 24;
     return Math.min(100, Math.round(((daysFromMon + partial) / 7) * 100));
   })();
+
+  if (authLoading || !user) return null;
 
   return (
     <>

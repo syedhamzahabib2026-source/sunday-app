@@ -97,6 +97,8 @@ export default function AnalyticsPage() {
     return [72, 85, 65, 90, 78, 55, 40][i] ?? 0;
   });
 
+  if (authLoading || !user) return null;
+
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-8 pb-20 page-fade">
       <div className="mb-8">

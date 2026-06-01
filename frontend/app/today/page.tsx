@@ -178,7 +178,7 @@ export default function TodayPage() {
     window.history.pushState({}, "", "/today");
   }
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (user) load(); }, [load, user]);
 
   useEffect(() => {
     const el = statsRef.current;
@@ -290,6 +290,8 @@ export default function TodayPage() {
     const endM = (eh === 0 && em === 0) ? 1440 : eh * 60 + em;
     return nowMins >= startM && nowMins < endM;
   }
+
+  if (authLoading || !user) return null;
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-8 pb-20 page-fade">
