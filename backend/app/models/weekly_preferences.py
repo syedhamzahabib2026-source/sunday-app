@@ -52,6 +52,11 @@ class WeeklyPreferences(Base):
     # Scheduling preferences in plain language — fed to the AI scheduling prompt
     scheduling_notes = Column(Text, nullable=True)
 
+    # Preferred meal times — "HH:MM" 24h; None means use scheduler default
+    meal_breakfast_time = Column(String, nullable=True)
+    meal_lunch_time     = Column(String, nullable=True)
+    meal_dinner_time    = Column(String, nullable=True)
+
     # Commitments
     fixed_commitments = Column(Text, nullable=True)  # JSON-encoded list
     notes = Column(Text, nullable=True)

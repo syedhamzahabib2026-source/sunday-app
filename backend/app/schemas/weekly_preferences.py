@@ -33,6 +33,9 @@ class WeeklyPreferencesCreate(BaseModel):
     mode: str = "manual"
     extra_context: Optional[str] = None
     scheduling_notes: Optional[str] = None   # plain-language scheduling preferences for the AI
+    meal_breakfast_time: Optional[str] = None  # "HH:MM" preferred breakfast time
+    meal_lunch_time:     Optional[str] = None  # "HH:MM" preferred lunch time
+    meal_dinner_time:    Optional[str] = None  # "HH:MM" preferred dinner time
 
 
 class WeeklyPreferencesUpdate(BaseModel):
@@ -62,6 +65,9 @@ class WeeklyPreferencesUpdate(BaseModel):
     mode: Optional[str] = None
     extra_context: Optional[str] = None
     scheduling_notes: Optional[str] = None
+    meal_breakfast_time: Optional[str] = None
+    meal_lunch_time:     Optional[str] = None
+    meal_dinner_time:    Optional[str] = None
 
 
 class WeeklyPreferencesResponse(BaseModel):
@@ -94,6 +100,9 @@ class WeeklyPreferencesResponse(BaseModel):
     mode: str
     extra_context: Optional[str]
     scheduling_notes: Optional[str]
+    meal_breakfast_time: Optional[str]
+    meal_lunch_time:     Optional[str]
+    meal_dinner_time:    Optional[str]
     created_at: datetime
 
     @field_validator("meal_prep_days", "fixed_commitments", mode="before")

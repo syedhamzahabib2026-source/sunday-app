@@ -5,6 +5,7 @@ Generates a full 7-day ScheduleBlock list for a user, working from a
 """
 import json
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -115,6 +116,7 @@ def _get_ai_scheduling_hints(
     Call Claude with the user's scheduling_notes and task list.
     Returns a dict mapping task title → preferred time slot:
       "morning" | "afternoon" | "evening" | "any"
+    Special key "fill_remaining_with" contains a task title to fill free slots with (or None).
     Gracefully returns {} on any failure (API key missing, network error, parse error).
     """
     if not scheduling_notes or not scheduling_notes.strip():
@@ -126,9 +128,12 @@ def _get_ai_scheduling_hints(
         return {}
 
     system_prompt = (
-        "You are a scheduling assistant. Given a list of tasks and constraints, "
-        "return ONLY a JSON object mapping each task title to its ideal time slot. "
-        "No explanations. No markdown. Raw JSON only."
+        "You are a scheduling assistant. You MUST follow the user's preferences exactly. "
+        "Given a list of tasks and constraints, return ONLY a JSON object. "
+        "No explanations. No markdown. Raw JSON only. "
+        "If the user says 'fill free time with X', 'use remaining time for X', "
+        "'X whenever possible', or 'all available slots for X', you MUST set "
+        "fill_remaining_with to that task's exact title from the list."
     )
 
     task_data = [
@@ -144,7 +149,12 @@ def _get_ai_scheduling_hints(
         f"- Energy: high in morning, low after 3pm\n\n"
         f"Tasks to schedule:\n{json.dumps(task_data, indent=2)}\n\n"
         f"User preferences: {scheduling_notes or 'none'}\n\n"
-        f'Return JSON: {{"task title": "morning|afternoon|evening|any"}}'
+        f"IMPORTANT: If the user says fill free time with X or use remaining time for X, "
+        f"you MUST return fill_remaining_with set to that task's exact title.\n\n"
+        f'Return JSON:\n{{\n'
+        f'  "task title": "morning|afternoon|evening|any",\n'
+        f'  "fill_remaining_with": "exact task title or null"\n'
+        f'}}'
     )
 
     print(f"[scheduler] Sending {len(task_data)} tasks to Claude for scheduling hints")
@@ -154,7 +164,7 @@ def _get_ai_scheduling_hints(
         client = Anthropic(api_key=api_key)
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=256,
+            max_tokens=512,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
@@ -164,11 +174,17 @@ def _get_ai_scheduling_hints(
         if "{" in raw and "}" in raw:
             json_str = raw[raw.index("{") : raw.rindex("}") + 1]
             hints = json.loads(json_str)
-            return {k: str(v).lower() for k, v in hints.items()}
+            # Normalise all values to lowercase strings, preserving fill_remaining_with
+            result: Dict[str, str] = {}
+            for k, v in hints.items():
+                if k == "fill_remaining_with":
+                    result[k] = str(v) if v and str(v).lower() != "null" else ""
+                else:
+                    result[k] = str(v).lower()
+            return result
 
     except Exception as exc:
         print(f"[scheduler] AI hint call failed (non-fatal): {exc}")
-        # Fall back: "any" for all tasks so scheduler uses algorithmic placement
         return {t.title: "any" for t in tasks}
 
     return {t.title: "any" for t in tasks}
@@ -194,14 +210,10 @@ def generate_weekly_schedule(
     """
 
     # ── Schedule-start window ─────────────────────────────────────────────────
-    # schedule_start = generation_timestamp + 1 hr, rounded up to next 15 min.
-    # Blocks are only created on/after schedule_start_date and at/after
-    # schedule_start_slot (for the partial first day).
     if generation_timestamp:
         try:
             ts_str = generation_timestamp.replace("Z", "+00:00")
             ts_aware = datetime.fromisoformat(ts_str)
-            # Normalise to UTC naive so arithmetic is consistent with server times
             ts = ts_aware.astimezone(timezone.utc).replace(tzinfo=None)
         except Exception:
             ts = datetime.utcnow()
@@ -244,20 +256,34 @@ def generate_weekly_schedule(
     commute_minutes         = p("commute_minutes",        30)
     is_remote               = p("is_remote",              False)
 
+    # Preferred meal times (Bug 2)
+    meal_breakfast_time = p("meal_breakfast_time", None)
+    meal_lunch_time     = p("meal_lunch_time",     None)
+    meal_dinner_time    = p("meal_dinner_time",    None)
+
     # AI mode: override wake/bed time defaults and disable Muay Thai.
-    # Meals, commute, gym: use the user's saved prefs (set via AI quick-prefs UI).
     if p("mode", "manual") == "ai":
         preferred_wake_time     = "07:00"
         preferred_bedtime       = "23:00"
         morning_routine_mins    = 30
         night_routine_mins      = 20
-        muay_thai_days_per_week = 0  # AI mode never schedules Muay Thai
+        muay_thai_days_per_week = 0
 
     tasks: List[Task] = (
         db.query(Task)
         .filter(Task.user_id == user_id, Task.status.in_(["pending", "scheduled"]))
         .all()
     )
+
+    # Debug: log all tasks and their fixed/flexible status (Bug 1)
+    print(f"[scheduler] Total tasks loaded: {len(tasks)}")
+    for t in tasks:
+        print(
+            f"[scheduler]   '{t.title}': is_flexible={t.is_flexible}, "
+            f"fixed_start_time={getattr(t, 'fixed_start_time', None)}, "
+            f"fixed_end_time={getattr(t, 'fixed_end_time', None)}, "
+            f"preferred_days={getattr(t, 'preferred_days', None)}"
+        )
 
     # ── AI scheduling hints from user's plain-language notes ──────────────────
     scheduling_notes = p("scheduling_notes", None) or ""
@@ -267,6 +293,24 @@ def generate_weekly_schedule(
         wake_time=preferred_wake_time,
         bed_time=preferred_bedtime,
     )
+
+    # Pop special fill_remaining_with key before using hints for time-of-day placement
+    ai_fill_title: str = ai_hints.pop("fill_remaining_with", "") or ""
+
+    # Also parse fill-remaining patterns directly from scheduling_notes (regex fallback)
+    _fill_patterns = [
+        r"fill\s+(?:free|remaining|all)\s+(?:time|slots?)\s+with\s+(.+?)(?:\s*$|[.,;])",
+        r"use\s+(?:remaining|all|free)\s+(?:time|slots?)\s+for\s+(.+?)(?:\s*$|[.,;])",
+        r"(.+?)\s+whenever\s+possible",
+        r"all\s+available\s+slots?\s+(?:for\s+)?(.+?)(?:\s*$|[.,;])",
+    ]
+    regex_fill_title = ""
+    if scheduling_notes and not ai_fill_title:
+        for _pat in _fill_patterns:
+            _m = re.search(_pat, scheduling_notes.strip(), re.IGNORECASE)
+            if _m:
+                regex_fill_title = _m.group(1).strip().lower()
+                break
 
     # ── Step 2: Build time map ────────────────────────────────────────────────
     time_map: List[List[bool]] = [[False] * SLOTS_PER_DAY for _ in range(7)]
@@ -279,22 +323,58 @@ def generate_weekly_schedule(
     gym_slots           = slots_needed(GYM_DURATION_MINS)
     mt_slots            = slots_needed(MT_DURATION_MINS)
 
-    # Night routine starts just before bed, never overlapping morning routine
     night_routine_start = max(wake_slot + routine_slots, bed_slot - night_routine_slots)
 
     # Pre-mark immovable slots on every day so later passes respect them.
-    # Past days are fully occupied so find_free_slot naturally skips them.
     for d in range(7):
         d_date = week_start_date + timedelta(days=d)
         if d_date < schedule_start_date:
             mark_occupied(time_map, d, 0, SLOTS_PER_DAY)  # entire past day
             continue
-        mark_occupied(time_map, d, 0, wake_slot)                             # morning sleep
-        mark_occupied(time_map, d, bed_slot, SLOTS_PER_DAY - bed_slot)      # evening sleep
-        mark_occupied(time_map, d, night_routine_start, night_routine_slots) # night routine
+        mark_occupied(time_map, d, 0, wake_slot)                              # morning sleep
+        mark_occupied(time_map, d, bed_slot, SLOTS_PER_DAY - bed_slot)       # evening sleep
+        mark_occupied(time_map, d, night_routine_start, night_routine_slots)  # night routine
         if d_date == schedule_start_date and schedule_start_slot > wake_slot:
-            # Also block waking-but-past slots so tasks/gym don't land there
             mark_occupied(time_map, d, wake_slot, schedule_start_slot - wake_slot)
+
+    # ── Bug 1 fix: Pre-mark fixed task slots so meals/gym won't land there ────
+    # This runs AFTER sleep is marked but BEFORE per-day blocks (meals, commute, gym).
+    sorted_tasks = sorted(tasks, key=lambda t: PRIORITY_ORDER.get(t.priority, 99))
+
+    fixed_tasks    = [t for t in sorted_tasks
+                      if not t.is_flexible and getattr(t, "fixed_start_time", None)]
+    flexible_tasks = [t for t in sorted_tasks
+                      if t.is_flexible or not getattr(t, "fixed_start_time", None)]
+
+    print(f"[scheduler] Fixed tasks: {len(fixed_tasks)}, Flexible tasks: {len(flexible_tasks)}")
+
+    for _ft in fixed_tasks:
+        try:
+            _fs = time_to_slot(_ft.fixed_start_time)
+            _fe = time_to_slot(_ft.fixed_end_time) if _ft.fixed_end_time else _fs + 1
+            _fn = max(1, _fe - _fs)
+        except Exception:
+            continue
+        _days_raw: List[str] = []
+        try:
+            if _ft.preferred_days:
+                _days_raw = json.loads(_ft.preferred_days)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        for _dn in _days_raw:
+            _di = DAY_NAME_TO_IDX.get(_dn)
+            if _di is None:
+                continue
+            _dd = week_start_date + timedelta(days=_di)
+            if _dd < schedule_start_date:
+                continue
+            if _dd == schedule_start_date and _fs < schedule_start_slot:
+                continue
+            # Only pre-mark during waking hours so we don't disturb sleep marks
+            if _fs >= wake_slot and (_fs + _fn) <= bed_slot:
+                mark_occupied(time_map, _di, _fs, _fn)
+                print(f"[scheduler]   Pre-marked '{_ft.title}' on {_dn} "
+                      f"slots {_fs}-{_fs+_fn} ({slot_to_time(_fs)}–{slot_to_time(_fs+_fn)})")
 
     # ── Step 3: Insert blocks ─────────────────────────────────────────────────
     blocks: List[ScheduleBlock] = []
@@ -304,11 +384,9 @@ def generate_weekly_schedule(
         day_date   = week_start_date + timedelta(days=day_idx)
         is_weekday = day_idx < 5  # Mon-Fri
 
-        # Skip days that are entirely in the past
         if day_date < schedule_start_date:
             continue
 
-        # For the partial first day, only create blocks that start at/after cutoff
         cutoff = schedule_start_slot if day_date == schedule_start_date else 0
 
         def _ok(start_slot: int) -> bool:
@@ -337,7 +415,6 @@ def generate_weekly_schedule(
         # Commute — weekdays only when not remote
         after_morning = routine_end
         if is_weekday and not is_remote:
-            # Morning commute right after routine
             if routine_end + commute_slots <= night_routine_start:
                 mark_occupied(time_map, day_idx, routine_end, commute_slots)
                 if _ok(routine_end):
@@ -345,7 +422,6 @@ def generate_weekly_schedule(
                                          routine_end, commute_slots))
                 after_morning = routine_end + commute_slots
 
-            # Evening commute: target ~17:30 (slot 35), scan backwards if needed
             pm = find_free_slot(time_map, day_idx, commute_slots,
                                 start_from=35, end_before=night_routine_start)
             if pm is None:
@@ -357,10 +433,17 @@ def generate_weekly_schedule(
                     blocks.append(_block(user_id, day_date, "commute", "Commute (Evening)",
                                          pm, commute_slots))
 
-        # Meals — breakfast just after morning block, lunch ~12:30, dinner ~19:00
-        breakfast_slot = after_morning + 1          # 30-min buffer
-        lunch_slot     = time_to_slot("12:30")
-        dinner_slot    = time_to_slot("19:00")
+        # Meals — use preferred times from prefs (Bug 2), fall back to defaults
+        default_breakfast_slot = after_morning + 1   # 30-min buffer after morning block
+        breakfast_slot = (
+            time_to_slot(meal_breakfast_time) if meal_breakfast_time
+            else default_breakfast_slot
+        )
+        lunch_slot  = time_to_slot(meal_lunch_time)  if meal_lunch_time  else time_to_slot("12:30")
+        dinner_slot = time_to_slot(meal_dinner_time) if meal_dinner_time else time_to_slot("19:00")
+
+        # Ensure breakfast target isn't before morning routine ends
+        breakfast_slot = max(breakfast_slot, after_morning)
 
         if meals_per_day == 1:
             meal_plan = [("Breakfast", breakfast_slot)]
@@ -384,7 +467,6 @@ def generate_weekly_schedule(
                                          ms, MEAL_DURATION_SLOTS))
 
     # ── 3e/3f: Gym and Muay Thai across the week ──────────────────────────────
-    # Target window: early afternoon ~13:00 (slot 26) to give tasks the morning
     AFTERNOON_START = 26   # 13:00
 
     gym_assigned = 0
@@ -421,21 +503,18 @@ def generate_weekly_schedule(
             blocks.append(_block(user_id, day_date, "muay_thai", "Muay Thai", ms, mt_slots))
             mt_assigned += 1
 
-    # ── 3g: Tasks — priority-sorted; fixed tasks placed first ────────────────
-    sorted_tasks = sorted(tasks, key=lambda t: PRIORITY_ORDER.get(t.priority, 99))
+    # ── 3g: Tasks — fixed tasks placed first (slots already pre-marked in step 2)
     unscheduled_tasks: List[Task] = []
 
-    # Partition into fixed (is_flexible=False with fixed_start_time) and flexible
-    fixed_tasks    = [t for t in sorted_tasks
-                      if not t.is_flexible and getattr(t, "fixed_start_time", None)]
-    flexible_tasks = [t for t in sorted_tasks
-                      if t.is_flexible or not getattr(t, "fixed_start_time", None)]
-
-    # ── Fixed tasks — placed at their exact time on the specified day(s) ─────
+    # ── Fixed tasks — placed at their exact time on the specified day(s) ──────
     for task in fixed_tasks:
-        start_slot = time_to_slot(task.fixed_start_time)
-        end_slot   = time_to_slot(task.fixed_end_time) if task.fixed_end_time else start_slot + 1
-        task_n     = max(1, end_slot - start_slot)
+        try:
+            start_slot = time_to_slot(task.fixed_start_time)
+            end_slot   = time_to_slot(task.fixed_end_time) if task.fixed_end_time else start_slot + 1
+        except Exception:
+            unscheduled_tasks.append(task)
+            continue
+        task_n            = max(1, end_slot - start_slot)
         task_commute_mins = getattr(task, "commute_minutes", 0) or 0
         task_commute_n    = slots_needed(task_commute_mins) if task_commute_mins else 0
 
@@ -446,6 +525,11 @@ def generate_weekly_schedule(
         except (json.JSONDecodeError, TypeError):
             pass
 
+        if not days_list:
+            print(f"[scheduler] Fixed task '{task.title}' has no preferred_days — skipping")
+            unscheduled_tasks.append(task)
+            continue
+
         placed = False
         for day_name in days_list:
             day_idx = DAY_NAME_TO_IDX.get(day_name)
@@ -454,19 +538,19 @@ def generate_weekly_schedule(
 
             day_date = week_start_date + timedelta(days=day_idx)
 
-            # Skip days in the past or before schedule_start
             if day_date < schedule_start_date:
                 continue
             if day_date == schedule_start_date and start_slot < schedule_start_slot:
                 continue
 
-            # Conflict check: are the task slots already occupied?
-            if any(time_map[day_idx][s]
-                   for s in range(start_slot, min(start_slot + task_n, SLOTS_PER_DAY))):
-                unscheduled_tasks.append(task)
-                break
+            # Reject if task falls entirely outside waking hours (user error)
+            if start_slot < wake_slot or (start_slot + task_n) > bed_slot:
+                print(f"[scheduler] Fixed task '{task.title}' on {day_name} "
+                      f"falls outside waking hours — skipping day")
+                continue
 
-            # Commute block before task (if slot is free and within waking hours)
+            # Slots are pre-reserved in step 2; just create the block.
+            # Commute block before task
             if task_commute_n > 0:
                 before_start = max(wake_slot, start_slot - task_commute_n)
                 if before_start >= wake_slot and before_start + task_commute_n <= start_slot:
@@ -475,11 +559,12 @@ def generate_weekly_schedule(
                                          before_start, task_commute_n))
 
             # Task block (locked — reorganizer will not move it)
-            mark_occupied(time_map, day_idx, start_slot, task_n)
             blocks.append(_block(user_id, day_date, "task", task.title,
                                   start_slot, task_n,
                                   task_id=task.id, priority=task.priority,
                                   is_locked=True))
+            print(f"[scheduler] Placed fixed task '{task.title}' on {day_name} "
+                  f"{slot_to_time(start_slot)}–{slot_to_time(start_slot + task_n)}")
 
             # Commute block after task
             if task_commute_n > 0:
@@ -491,11 +576,10 @@ def generate_weekly_schedule(
 
             placed = True
 
-        if not placed and task not in unscheduled_tasks:
+        if not placed:
             unscheduled_tasks.append(task)
 
     # ── Flexible tasks — first-fit with optional commute wrapping ────────────
-    # Slot boundaries for AI time-of-day hints
     MORNING_END   = time_to_slot("12:00")
     AFTERNOON_END = time_to_slot("17:00")
 
@@ -503,10 +587,8 @@ def generate_weekly_schedule(
         task_n = slots_needed(task.duration_minutes)
         task_commute_mins = getattr(task, "commute_minutes", 0) or 0
         task_commute_n    = slots_needed(task_commute_mins) if task_commute_mins else 0
-        # Total contiguous slots needed: [commute] + task + [commute]
         total_n = task_commute_n + task_n + task_commute_n
 
-        # AI-suggested time-of-day preference for this task
         hint = ai_hints.get(task.title, "any").lower()
         if hint == "morning":
             pref_start, pref_end = wake_slot + routine_slots, MORNING_END
@@ -519,7 +601,6 @@ def generate_weekly_schedule(
 
         placed = False
         for day_idx in range(7):
-            # Try preferred window first (from AI hint), then full day as fallback
             ts = find_free_slot(time_map, day_idx, total_n,
                                 start_from=pref_start, end_before=pref_end)
             if ts is None:
@@ -530,7 +611,6 @@ def generate_weekly_schedule(
                 day_date = week_start_date + timedelta(days=day_idx)
 
                 if task_commute_n > 0:
-                    # Commute before
                     mark_occupied(time_map, day_idx, ts, task_commute_n)
                     blocks.append(_block(user_id, day_date, "commute", "Commute",
                                          ts, task_commute_n))
@@ -542,7 +622,6 @@ def generate_weekly_schedule(
                                       task_id=task.id, priority=task.priority))
 
                 if task_commute_n > 0:
-                    # Return commute
                     return_start = task_start + task_n
                     mark_occupied(time_map, day_idx, return_start, task_commute_n)
                     blocks.append(_block(user_id, day_date, "commute", "Return Commute",
@@ -554,13 +633,61 @@ def generate_weekly_schedule(
         if not placed:
             unscheduled_tasks.append(task)
 
+    # ── Bug 3: Fill remaining free slots with the specified task ──────────────
+    # Resolve fill target: prefer AI response, fall back to regex parse of notes.
+    _fill_target_title = ai_fill_title or regex_fill_title
+
+    if _fill_target_title:
+        # Find the matching task (case-insensitive)
+        fill_task: Optional[Task] = None
+        for _t in tasks:
+            if _t.title.lower() == _fill_target_title.lower():
+                fill_task = _t
+                break
+        if fill_task is None:
+            # Partial match fallback
+            for _t in tasks:
+                if (_fill_target_title.lower() in _t.title.lower() or
+                        _t.title.lower() in _fill_target_title.lower()):
+                    fill_task = _t
+                    break
+
+        if fill_task is not None:
+            print(f"[scheduler] Filling remaining free slots with '{fill_task.title}'")
+            extra_placed = 0
+            MAX_EXTRA = 4
+            fill_slots = slots_needed(120)  # 2-hour fill blocks
+
+            for day_idx in range(7):
+                if extra_placed >= MAX_EXTRA:
+                    break
+                day_date = week_start_date + timedelta(days=day_idx)
+                if day_date < schedule_start_date:
+                    continue
+                # Keep scanning each day for consecutive free 2-hour windows
+                scan_from = wake_slot + routine_slots
+                while extra_placed < MAX_EXTRA:
+                    ts = find_free_slot(time_map, day_idx, fill_slots,
+                                        start_from=scan_from,
+                                        end_before=night_routine_start)
+                    if ts is None:
+                        break
+                    mark_occupied(time_map, day_idx, ts, fill_slots)
+                    blocks.append(_block(user_id, day_date, "task", fill_task.title,
+                                          ts, fill_slots,
+                                          task_id=fill_task.id,
+                                          priority=fill_task.priority))
+                    extra_placed += 1
+                    scan_from = ts + fill_slots
+        else:
+            print(f"[scheduler] fill_remaining_with='{_fill_target_title}' "
+                  f"but no matching task found")
+
     is_overloaded = bool(unscheduled_tasks)
 
     # ── Step 4: Save to database ──────────────────────────────────────────────
     week_end = week_start_date + timedelta(days=6)
 
-    # Full replace — delete all existing blocks for this week so re-generation
-    # is idempotent (sleep blocks are re-created each run anyway)
     db.query(ScheduleBlock).filter(
         ScheduleBlock.user_id == user_id,
         ScheduleBlock.date >= week_start_date,
@@ -620,7 +747,6 @@ def reorganize_missed_task(
     now   = datetime.utcnow()
     today = now.date()
 
-    # ── Step 2: early-drop rules ──────────────────────────────────────────────
     if priority == "optional":
         return {"rescheduled": False, "reason": "optional_dropped", "task_title": task.title}
 
@@ -630,21 +756,17 @@ def reorganize_missed_task(
         if deadline_date < today:
             return {"rescheduled": False, "reason": "deadline_passed", "task_title": task.title}
 
-    # ── Search window ─────────────────────────────────────────────────────────
     week_end   = today + timedelta(days=6 - today.weekday())
     search_end = min(deadline_date, week_end) if deadline_date else week_end
 
-    # Low priority: only look today and tomorrow
     if priority == "low":
         search_end = min(search_end, today + timedelta(days=1))
 
     num_days = max(1, (search_end - today).days + 1)
 
-    # Start slot: now + 30 min
     now_mins          = now.hour * 60 + now.minute + 30
     search_start_slot = min(now_mins // 30 + 1, SLOTS_PER_DAY)
 
-    # ── Build time_map ────────────────────────────────────────────────────────
     time_map: List[List[bool]] = [[False] * SLOTS_PER_DAY for _ in range(num_days)]
 
     future_blocks = (
@@ -669,7 +791,6 @@ def reorganize_missed_task(
 
     mark_occupied(time_map, 0, 0, min(search_start_slot, SLOTS_PER_DAY))
 
-    # ── Step 3: score all candidate slots ────────────────────────────────────
     LATE_NIGHT_SLOT = time_to_slot("22:00")
     MEAL_SLOTS      = [time_to_slot("08:00"), time_to_slot("12:30"), time_to_slot("19:00")]
     original_slot   = time_to_slot(missed_block.start_time) if missed_block else None
@@ -680,27 +801,24 @@ def reorganize_missed_task(
 
     orig_period = _orig_period(original_slot)
 
-    candidates: List[tuple] = []  # (score, d_offset, start_slot)
+    candidates: List[tuple] = []
 
     for d_offset in range(num_days):
         from_slot = search_start_slot if d_offset == 0 else 0
         for start in range(from_slot, SLOTS_PER_DAY - task_slots + 1):
             if not all(not time_map[d_offset][s] for s in range(start, start + task_slots)):
-                continue  # slot occupied
+                continue
 
-            score = d_offset  # day penalty: today=0, tomorrow=1, …
+            score = d_offset
 
-            # Late-night penalty
             if start >= LATE_NIGHT_SLOT:
                 score += 2
 
-            # Meal-time adjacency penalty
             for ms in MEAL_SLOTS:
                 if abs(start - ms) <= 1:
                     score += 1
                     break
 
-            # Time-of-day match bonus (medium priority prefers same period)
             if priority in ("medium", "low"):
                 slot_period = 0 if start < 24 else 1 if start < 34 else 2
                 if slot_period == orig_period:
@@ -718,7 +836,6 @@ def reorganize_missed_task(
             }
         return {"rescheduled": False, "reason": "no_slot_found", "task_title": task.title}
 
-    # ── Step 4: insert at best slot ──────────────────────────────────────────
     candidates.sort()
     _, best_d_offset, best_slot = candidates[0]
     new_date = today + timedelta(days=best_d_offset)

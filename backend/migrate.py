@@ -55,8 +55,11 @@ def run_migrations() -> None:
     _add_column_if_missing("tasks",               "fixed_start_time",  "VARCHAR")
     _add_column_if_missing("tasks",               "fixed_end_time",    "VARCHAR")
     _add_column_if_missing("tasks",               "commute_minutes",   "INTEGER DEFAULT 0")
-    _add_column_if_missing("weekly_preferences",  "scheduling_notes",  "TEXT")
-    _add_column_if_missing("schedule_blocks",     "status",            "VARCHAR")
+    _add_column_if_missing("weekly_preferences",  "scheduling_notes",    "TEXT")
+    _add_column_if_missing("weekly_preferences",  "meal_breakfast_time", "VARCHAR")
+    _add_column_if_missing("weekly_preferences",  "meal_lunch_time",     "VARCHAR")
+    _add_column_if_missing("weekly_preferences",  "meal_dinner_time",    "VARCHAR")
+    _add_column_if_missing("schedule_blocks",     "status",              "VARCHAR")
     _add_column_if_missing("schedule_blocks",     "is_rescheduled",    "BOOLEAN DEFAULT FALSE")
     _add_column_if_missing("schedules",           "week_type",         "VARCHAR DEFAULT 'current'")
 

@@ -32,6 +32,7 @@ type WorkoutTime = "morning" | "afternoon" | "evening";
 type EnergyPref  = "front_load" | "spread_out";
 type Mode        = "ai" | "manual";
 type TimingPref  = "ai_decide" | "morning" | "afternoon" | "evening";
+type MealTiming  = "Early" | "Normal" | "Late";
 
 interface FixedCommitment {
   id: string; name: string; time: string; duration: number; days: string[];
@@ -80,6 +81,10 @@ interface WizardData {
   ai_meal_duration_mins: number;
   ai_has_commute: boolean;
   ai_commute_mins: number;
+  // Meal timing preferences (shared between AI and manual)
+  breakfast_timing: MealTiming;
+  lunch_timing:     MealTiming;
+  dinner_timing:    MealTiming;
 }
 
 interface DraftState {
@@ -185,6 +190,9 @@ const DEFAULTS: WizardData = {
   ai_meal_duration_mins: 20,
   ai_has_commute: false,
   ai_commute_mins: 30,
+  breakfast_timing: "Normal",
+  lunch_timing:     "Normal",
+  dinner_timing:    "Normal",
 };
 
 // ─── UI Primitives ────────────────────────────────────────────────────────────
@@ -572,6 +580,18 @@ function Step2({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
       </div>
       <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 mb-8">
         <Stepper label="Average meal duration" value={data.meal_duration_mins} onChange={v => set("meal_duration_mins", v)} min={10} max={60} />
+      </div>
+      <div className="space-y-5 mb-8">
+        <MealTimingRow meal="Breakfast" value={data.breakfast_timing}
+          onChange={v => set("breakfast_timing", v)} />
+        {data.meals_per_day >= 3 && (
+          <MealTimingRow meal="Lunch" value={data.lunch_timing}
+            onChange={v => set("lunch_timing", v)} />
+        )}
+        {data.meals_per_day >= 2 && (
+          <MealTimingRow meal="Dinner" value={data.dinner_timing}
+            onChange={v => set("dinner_timing", v)} />
+        )}
       </div>
       <div>
         <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Meal prep days</p>
@@ -1089,6 +1109,38 @@ function DraftTaskForm({ onAdd, onCancel, mode }: {
   );
 }
 
+// ─── Meal timing row (reused in AI and Manual modes) ─────────────────────────
+
+function MealTimingRow({ meal, value, onChange }: {
+  meal: string;
+  value: MealTiming;
+  onChange: (v: MealTiming) => void;
+}) {
+  return (
+    <div>
+      <p className="text-[14px] font-medium text-gray-700 mb-2">
+        When do you usually eat {meal.toLowerCase()}?
+      </p>
+      <div className="flex bg-gray-100 rounded-full p-1 gap-1 max-w-xs">
+        {(["Early", "Normal", "Late"] as const).map(t => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => onChange(t)}
+            className={`flex-1 py-1.5 rounded-full text-[13px] font-semibold transition-all ${
+              value === t
+                ? "bg-white text-indigo-600 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── AI QUICK PREFS ───────────────────────────────────────────────────────────
 
 function AIQuickPrefs({ data, set }: {
@@ -1140,6 +1192,18 @@ function AIQuickPrefs({ data, set }: {
           ))}
         </div>
       </div>
+
+      {/* Meal timing */}
+      <MealTimingRow meal="Breakfast" value={data.breakfast_timing}
+        onChange={v => set("breakfast_timing", v)} />
+      {data.ai_meals_per_day >= 3 && (
+        <MealTimingRow meal="Lunch" value={data.lunch_timing}
+          onChange={v => set("lunch_timing", v)} />
+      )}
+      {data.ai_meals_per_day >= 2 && (
+        <MealTimingRow meal="Dinner" value={data.dinner_timing}
+          onChange={v => set("dinner_timing", v)} />
+      )}
 
       {/* Commute */}
       <div>
@@ -1596,6 +1660,10 @@ export default function SetupPage() {
     return null;
   }
 
+  const BREAKFAST_TIMES: Record<MealTiming, string> = { Early: "06:30", Normal: "07:30", Late: "09:00" };
+  const LUNCH_TIMES:     Record<MealTiming, string> = { Early: "11:30", Normal: "12:30", Late: "14:00" };
+  const DINNER_TIMES:    Record<MealTiming, string> = { Early: "17:30", Normal: "19:00", Late: "20:30" };
+
   async function handleGenerate() {
     setGenerating(true);
     setErrMsg(null);
@@ -1608,6 +1676,7 @@ export default function SetupPage() {
       const serializedCommitments = data.fixed_commitments.map(c =>
         JSON.stringify({ name: c.name, time: c.time, duration: c.duration, days: c.days })
       );
+      const effectiveMealsPerDay = mode === "ai" ? data.ai_meals_per_day : data.meals_per_day;
 
       await savePreferences({
         user_id: USER_ID,
@@ -1640,6 +1709,9 @@ export default function SetupPage() {
         mode: mode ?? "manual",
         extra_context: data.extra_context || null,
         scheduling_notes: data.extra_context || null,
+        meal_breakfast_time: BREAKFAST_TIMES[data.breakfast_timing],
+        meal_lunch_time:     effectiveMealsPerDay >= 3 ? LUNCH_TIMES[data.lunch_timing]  : null,
+        meal_dinner_time:    effectiveMealsPerDay >= 2 ? DINNER_TIMES[data.dinner_timing] : null,
       });
 
       for (const task of data.tasks) {

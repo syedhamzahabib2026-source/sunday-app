@@ -72,6 +72,9 @@ export interface WeeklyPreferences {
   mode: string;
   extra_context: string | null;
   scheduling_notes: string | null;
+  meal_breakfast_time: string | null;
+  meal_lunch_time:     string | null;
+  meal_dinner_time:    string | null;
   created_at: string;
 }
 
