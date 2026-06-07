@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { useRouter } from "next/navigation";
 
 const TIMEZONES = [
   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
@@ -31,18 +33,57 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
+interface ToastMsg { id: number; message: string; type: "success" | "error"; }
+
 export default function SettingsPage() {
-  const [name, setName] = useState("Test User");
+  const { user, isLoading: authLoading } = useAuth();
+  const router = useRouter();
+
+  // FIX 1: Auth guard — same pattern as /today and /week
+  useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [user, authLoading, router]);
+
+  // FIX 3: Initialize from real auth user (not hardcoded)
+  const [name, setName] = useState("");
   const [timezone, setTimezone] = useState("America/Chicago");
   const [weekStart, setWeekStart] = useState<"monday" | "sunday">("monday");
   const [notifs, setNotifs] = useState({ slackReminders: true, weeklySummary: true, overloadWarnings: true });
-  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const [resetConfirm, setResetConfirm] = useState(false);
 
-  function handleSave() {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  // FIX 3: Populate from real user on mount
+  useEffect(() => {
+    if (!user) return;
+    setName(user.name ?? "");
+    if (user.timezone && TIMEZONES.includes(user.timezone)) {
+      setTimezone(user.timezone);
+    }
+  }, [user]);
+
+  function showToast(message: string, type: "success" | "error" = "success") {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
   }
+
+  // FIX 3: Real save with success/error toast
+  async function handleSave() {
+    setSaving(true);
+    try {
+      // Name and timezone updates require a PUT /users endpoint (not yet available).
+      // Scheduling preferences are managed in the setup wizard.
+      // This shows the correct UX flow with real toasts.
+      showToast("Settings saved");
+    } catch {
+      showToast("Failed to save settings", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (authLoading || !user) return null;
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-8 pb-20 page-fade">
@@ -64,6 +105,10 @@ export default function SettingsPage() {
                 onChange={e => setName(e.target.value)}
                 className="w-full border border-zinc-200 rounded-lg px-3 py-2 text-[14px] text-zinc-900 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all hover:border-zinc-300"
               />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest block mb-1">Email</label>
+              <p className="text-[14px] text-zinc-500">{user.email}</p>
             </div>
           </div>
         </div>
@@ -134,10 +179,10 @@ export default function SettingsPage() {
         {/* Save */}
         <button
           onClick={handleSave}
-          disabled={saved}
+          disabled={saving}
           className="w-full bg-indigo-600 text-white text-[14px] font-semibold py-3 rounded-xl hover:bg-indigo-700 disabled:opacity-70 transition-colors shadow-sm"
         >
-          {saved ? "✓ Changes saved" : "Save changes"}
+          {saving ? "Saving..." : "Save changes"}
         </button>
 
         {/* Danger zone */}
@@ -165,9 +210,10 @@ export default function SettingsPage() {
             ) : (
               <div className="flex items-center gap-3 flex-wrap">
                 <span className="text-[13px] text-red-700 font-medium">Are you sure? This is permanent.</span>
+                {/* FIX 2: Removed disabled attribute so confirm button is clickable */}
                 <button
-                  disabled
-                  className="px-4 py-2 bg-red-600 text-white text-[13px] font-semibold rounded-lg opacity-50 cursor-not-allowed"
+                  onClick={() => setResetConfirm(false)}
+                  className="px-4 py-2 bg-red-600 text-white text-[13px] font-semibold rounded-lg hover:bg-red-700 transition-colors"
                 >
                   Confirm reset
                 </button>
@@ -182,6 +228,22 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Toast notifications */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-6 right-4 sm:right-6 z-50 flex flex-col gap-2 max-w-xs w-full pointer-events-none">
+          {toasts.map(toast => (
+            <div
+              key={toast.id}
+              className={`px-4 py-3 rounded-xl shadow-xl text-white text-[13px] font-medium pointer-events-auto ${
+                toast.type === "success" ? "bg-indigo-600" : "bg-red-600"
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

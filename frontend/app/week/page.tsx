@@ -14,6 +14,8 @@ import { useRouter } from "next/navigation";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+interface ToastMsg { id: number; message: string; type: "success" | "error"; }
+
 function toLocalDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -87,6 +89,13 @@ export default function WeekPage() {
   const [drawerCompletedIds, setDrawerCompletedIds] = useState<Set<number>>(new Set());
   const [drawerMissedIds,    setDrawerMissedIds]    = useState<Set<number>>(new Set());
   const [drawerExpandedId,   setDrawerExpandedId]   = useState<number | null>(null);
+  const [toasts,             setToasts]             = useState<ToastMsg[]>([]);
+
+  function showToast(message: string, type: "success" | "error" = "success") {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  }
 
   const todayStr = toLocalDateString(new Date());
 
@@ -111,7 +120,7 @@ export default function WeekPage() {
     setArchiveLoading(true);
     getArchivedWeekBlocks(rec.week_start_date)
       .then(d => { setArchiveBlocks(d); setArchiveLoading(false); })
-      .catch(() => setArchiveLoading(false));
+      .catch(() => { setArchiveLoading(false); showToast("Failed to load archive", "error"); });
   }
 
   function handleDeleteArchive(id: number) {
@@ -119,7 +128,7 @@ export default function WeekPage() {
       setArchivedSchedules(p => p.filter(s => s.id !== id));
       if (viewingArchive?.id === id) setViewingArchive(null);
       setConfirmDelete(null);
-    }).catch(() => setConfirmDelete(null));
+    }).catch(() => { setConfirmDelete(null); showToast("Failed to delete archive", "error"); });
   }
 
   function openDrawer(dateStr: string) {
@@ -159,7 +168,17 @@ export default function WeekPage() {
     } else if (action === "miss") {
       setDrawerMissedIds(p => new Set(p).add(blockId));
       await updateTaskStatus(taskId, "missed");
-      await reorganizeMissed(blockId);
+      // FIX 10: show toast with reschedule outcome
+      try {
+        const result = await reorganizeMissed(blockId);
+        if (result.rescheduled && result.new_date) {
+          showToast(`Task rescheduled to ${result.new_date}`);
+        } else {
+          showToast(`Task couldn't be rescheduled — no slot found this week`, "error");
+        }
+      } catch {
+        showToast("Reschedule failed", "error");
+      }
     }
     // Reload drawer + week
     if (drawerDate) openDrawer(drawerDate);
@@ -305,6 +324,21 @@ export default function WeekPage() {
         </div>
       )}
 
+      {/* FIX 11: Empty state for current week with no blocks */}
+      {!viewingNext && !loading && !error && blocks.length === 0 && (
+        <div className="py-20 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-zinc-100 flex items-center justify-center text-3xl mx-auto mb-5">📅</div>
+          <p className="text-[16px] font-medium text-zinc-500 mb-2">No schedule for this week</p>
+          <p className="text-[13px] text-zinc-400 mb-6">
+            Go to{" "}
+            <a href="/setup" className="text-indigo-600 hover:underline font-semibold">
+              Setup
+            </a>{" "}
+            to build your week.
+          </p>
+        </div>
+      )}
+
       {/* 7-column grid */}
       {!loading && !error && (
         <div className="overflow-x-auto">
@@ -445,6 +479,22 @@ export default function WeekPage() {
         </div>
       )}
     </div>
+
+      {/* Toast notifications */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-6 right-4 sm:right-6 z-50 flex flex-col gap-2 max-w-xs w-full pointer-events-none">
+          {toasts.map(toast => (
+            <div
+              key={toast.id}
+              className={`px-4 py-3 rounded-xl shadow-xl text-white text-[13px] font-medium pointer-events-auto ${
+                toast.type === "success" ? "bg-indigo-600" : "bg-red-600"
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      )}
     </>
   );
 }

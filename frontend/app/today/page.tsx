@@ -33,7 +33,16 @@ function getWeekNumber(d: Date): number {
   return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 }
 
+function getWeekMondayStr(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00");
+  const day = d.getDay();
+  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// FIX 8: guard against null/undefined or missing ":" in time strings
 function blockMins(b: ScheduleBlock): number {
+  if (!b.start_time?.includes(":") || !b.end_time?.includes(":")) return 0;
   const [sh, sm] = b.start_time.split(":").map(Number);
   const [eh, em] = b.end_time.split(":").map(Number);
   const raw = (eh * 60 + em) - (sh * 60 + sm);
@@ -158,6 +167,9 @@ export default function TodayPage() {
       }
       setCompletedIds(completed);
       setMissedIds(missed);
+      // FIX 7: restore overload banner from localStorage (set by setup wizard after generation)
+      const monday = getWeekMondayStr(viewingDateStr);
+      setOverloaded(localStorage.getItem(`sunday_overloaded_${monday}`) === "1");
     } catch (e) {
       console.error("[Sunday] Failed to load schedule:", e);
       setError(String(e));
@@ -540,7 +552,7 @@ export default function TodayPage() {
                 onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
                 className="shrink-0 text-white/70 hover:text-white text-[11px] font-semibold border border-white/30 rounded px-2 py-0.5"
               >
-                Undo
+                Dismiss
               </button>
             </div>
           ))}

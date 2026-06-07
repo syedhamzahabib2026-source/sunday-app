@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
-  savePreferences, generateSchedule, createTask,
+  savePreferences, generateSchedule, createTask, getAllTasks,
   getLatestPreferences, getRecentTasks,
   getSavedLocations, saveLocation,
   type WeeklyPreferences, type Task as ApiTask, type UserLocation,
@@ -2000,8 +2000,11 @@ export default function SetupPage() {
     setErrMsg(null);
     setLoadingMsgIdx(0);
     try {
-      await runGenerate(genData, "manual");
+      const taskErrors = await runGenerate(genData, "manual");
       setGeneratingDirectly(false);
+      if (taskErrors.length > 0) {
+        setErrMsg(`⚠ ${taskErrors.length} task(s) couldn't be created (duplicates or errors). Schedule built with the rest.`);
+      }
       setDone(true);
     } catch (e) {
       console.error("[Sunday] Same-as-last-week generation failed:", e);
@@ -2124,35 +2127,54 @@ export default function SetupPage() {
       deep_work_session_duration: genData.deep_work_session_duration,
     });
 
-    for (const task of genData.tasks) {
-      await createTask({
-        title: task.title,
-        duration_minutes: task.duration_minutes,
-        deadline: null,
-        priority: task.priority,
-        energy_level: "medium",
-        is_flexible: task.is_flexible ?? true,
-        timing_preference: task.timing_preference,
-        preferred_days: task.preferred_days.length > 0
-          ? JSON.stringify(task.preferred_days)
-          : null,
-        fixed_start_time: task.fixed_start_time ?? null,
-        fixed_end_time:   task.fixed_end_time   ?? null,
-        commute_minutes:  task.commute_minutes   ?? 0,
-        is_recurring:     task.is_recurring      ?? false,
-      });
-      // Save location name if task has commute and locationName
+    // FIX 12: fetch existing tasks to skip duplicates; wrap each creation in error handling
+    let existingTitles = new Set<string>();
+    try {
+      const existingTasks = await getAllTasks();
+      existingTasks
+        .filter(t => t.status === "pending" || t.status === "scheduled")
+        .forEach(t => existingTitles.add(t.title.toLowerCase().trim()));
+    } catch {
+      // Proceed without dedup if fetch fails
     }
 
-    // Save any new locations from tasks that have a location name stored
+    const taskErrors: string[] = [];
     for (const task of genData.tasks) {
-      if (task.commute_minutes && task.commute_minutes > 0) {
-        // We don't have locationName here, but locations are saved via onSaveLocation callback
+      if (existingTitles.has(task.title.toLowerCase().trim())) {
+        console.warn("[Sunday] Skipping duplicate task:", task.title);
+        continue;
+      }
+      try {
+        await createTask({
+          title: task.title,
+          duration_minutes: task.duration_minutes,
+          deadline: null,
+          priority: task.priority,
+          energy_level: "medium",
+          is_flexible: task.is_flexible ?? true,
+          timing_preference: task.timing_preference,
+          preferred_days: task.preferred_days.length > 0
+            ? JSON.stringify(task.preferred_days)
+            : null,
+          fixed_start_time: task.fixed_start_time ?? null,
+          fixed_end_time:   task.fixed_end_time   ?? null,
+          commute_minutes:  task.commute_minutes   ?? 0,
+          is_recurring:     task.is_recurring      ?? false,
+        });
+        existingTitles.add(task.title.toLowerCase().trim());
+      } catch (e) {
+        console.error("[Sunday] Task creation failed:", task.title, e);
+        taskErrors.push(task.title);
       }
     }
 
-    await generateSchedule(weekStart, generationTimestamp, weekTarget);
+    // FIX 7: store is_overloaded in localStorage so today page can read it on load
+    const genResult = await generateSchedule(weekStart, generationTimestamp, weekTarget);
+    try {
+      localStorage.setItem(`sunday_overloaded_${weekStart}`, genResult.is_overloaded ? "1" : "0");
+    } catch { /* ignore */ }
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    return taskErrors;
   }
 
   async function handleGenerate() {
@@ -2161,8 +2183,11 @@ export default function SetupPage() {
     setErrMsg(null);
     setLoadingMsgIdx(0);
     try {
-      await runGenerate(data, mode);
+      const taskErrors = await runGenerate(data, mode);
       setGenerating(false);
+      if (taskErrors.length > 0) {
+        setErrMsg(`⚠ ${taskErrors.length} task(s) couldn't be created (duplicates or errors). Schedule built with the rest.`);
+      }
       setDone(true);
     } catch (e) {
       console.error("[Sunday] Schedule generation failed:", e);

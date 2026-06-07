@@ -92,9 +92,32 @@ export default function AnalyticsPage() {
     missed: completions.length === 0 ? 0 : Math.round((completions.filter(c => c.status === "missed").length / completions.length) * 100),
   };
 
+  // FIX 5: real consecutive-week streak from archived schedule dates
+  const sortedSchedules = [...schedules]
+    .filter(s => s.week_start_date)
+    .sort((a, b) => new Date(b.week_start_date).getTime() - new Date(a.week_start_date).getTime());
+  let consecutiveWeeks = sortedSchedules.length === 0 ? 0 : 1;
+  for (let i = 0; i < sortedSchedules.length - 1; i++) {
+    const curr = new Date(sortedSchedules[i].week_start_date + "T00:00:00");
+    const prev = new Date(sortedSchedules[i + 1].week_start_date + "T00:00:00");
+    const diffDays = Math.round((curr.getTime() - prev.getTime()) / 86400000);
+    if (diffDays === 7) consecutiveWeeks++;
+    else break;
+  }
+
+  // FIX 4: real heatmap from completion records grouped by day of week
+  const dayCompleted = [0, 0, 0, 0, 0, 0, 0];
+  const dayTotal = [0, 0, 0, 0, 0, 0, 0];
+  for (const c of completions) {
+    const dateStr = c.completed_at ?? c.created_at;
+    if (!dateStr) continue;
+    const dow = (new Date(dateStr).getDay() + 6) % 7; // Mon=0 … Sun=6
+    dayTotal[dow]++;
+    if (c.status === "complete") dayCompleted[dow]++;
+  }
   const heatmapValues = DAYS.map((_, i) => {
-    if (weeksTracked === 0) return 0;
-    return [72, 85, 65, 90, 78, 55, 40][i] ?? 0;
+    if (dayTotal[i] === 0) return 0;
+    return Math.round((dayCompleted[i] / dayTotal[i]) * 100);
   });
 
   if (authLoading || !user) return null;
@@ -148,9 +171,9 @@ export default function AnalyticsPage() {
             />
             <StatCard label="Weeks tracked" value={weeksTracked} Icon={Calendar} iconBg="bg-purple-50" iconColor="text-purple-600" sub="archived schedules" />
             <StatCard
-              label="Streak" value={weeksTracked >= 1 ? `${weeksTracked}w` : "—"}
+              label="Streak" value={consecutiveWeeks >= 1 ? `${consecutiveWeeks}w` : "—"}
               Icon={Zap} iconBg="bg-amber-50" iconColor="text-amber-600"
-              sub={weeksTracked >= 1 ? "consecutive weeks" : "start your first week"}
+              sub={consecutiveWeeks >= 1 ? "consecutive weeks" : "start your first week"}
             />
           </div>
 
