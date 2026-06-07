@@ -67,7 +67,7 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
             "grant_type":    "authorization_code",
         })
     if token_resp.status_code != 200:
-        raise HTTPException(status_code=400, detail=f"Google token exchange failed: {token_resp.text}")
+        raise HTTPException(status_code=400, detail="Google authentication failed. Please try again.")
     token_data = token_resp.json()
 
     async with httpx.AsyncClient() as client:

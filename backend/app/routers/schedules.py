@@ -3,6 +3,7 @@ Schedule lifecycle management.
 Handles: pending → active → archived transitions, archive browsing,
 and the smart event-add flow (with warning mode).
 """
+import re
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -104,6 +105,12 @@ def get_archived_week_blocks(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    schedule = db.query(Schedule).filter(
+        Schedule.user_id == current_user.id,
+        Schedule.week_start_date == week_start,
+    ).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
     week_end = week_start + timedelta(days=6)
     return (
         db.query(ScheduleBlock)
@@ -169,6 +176,9 @@ def generate_with_lifecycle(
     except ValueError:
         raise HTTPException(status_code=422, detail="week_start_date must be YYYY-MM-DD")
 
+    if week_start.weekday() != 0:
+        raise HTTPException(status_code=422, detail="week_start_date must be a Monday")
+
     today = date.today()
     is_sunday    = today.weekday() == 6
     next_monday  = today - timedelta(days=today.weekday()) + timedelta(weeks=1)
@@ -229,6 +239,12 @@ def add_event(
         event_date = date.fromisoformat(payload.date)
     except ValueError:
         raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD")
+
+    _time_re = re.compile(r"^\d{2}:\d{2}$")
+    if not _time_re.match(payload.start_time):
+        raise HTTPException(status_code=422, detail="start_time must be HH:MM")
+    if not _time_re.match(payload.end_time):
+        raise HTTPException(status_code=422, detail="end_time must be HH:MM")
 
     start_slot = time_to_slot(payload.start_time)
     end_slot   = time_to_slot(payload.end_time)

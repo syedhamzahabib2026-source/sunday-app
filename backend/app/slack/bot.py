@@ -1,5 +1,6 @@
 import difflib
 import json
+import logging
 import os
 import re
 from datetime import date, datetime, timedelta
@@ -12,7 +13,8 @@ from slack_bolt import App
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
-print(f"[DEBUG] ANTHROPIC_API_KEY loaded: {'YES' if os.getenv('ANTHROPIC_API_KEY') else 'NO - KEY MISSING'}")
+logger = logging.getLogger(__name__)
+logger.debug("ANTHROPIC_API_KEY loaded: %s", "YES" if os.getenv("ANTHROPIC_API_KEY") else "NO - KEY MISSING")
 
 app = App(
     token=os.environ["SLACK_BOT_TOKEN"],
@@ -82,7 +84,7 @@ For add_event: if only start_time and duration given, compute end_time = start_t
 Respond ONLY with raw JSON starting with { — no markdown, no code fences, no extra text:
 {"intent":"add_task","data":{"title":"Work meeting","duration_minutes":60,"priority":"critical","deadline":null},"confidence":"high","missing_fields":["duration_minutes"]}"""
 
-print(f"[DEBUG] system prompt loaded: {_CLAUDE_SYSTEM[:120]}...")
+logger.debug("system prompt loaded: %s...", _CLAUDE_SYSTEM[:120])
 
 _claude_client = None
 
@@ -118,7 +120,7 @@ def parse_intent(message_text: str, state: Optional[dict] = None) -> dict:
             raw = re.sub(r"\s*```\s*$", "", raw).strip()
         return json.loads(raw)
     except Exception as exc:
-        print(f"[DEBUG] parse_user_intent failed: {exc}")
+        logger.warning("parse_user_intent failed: %s", exc)
         return {}
 
 
@@ -286,7 +288,7 @@ def _cancel_matching_block(type_hint: str, day_hint: str, say) -> bool:
         try:
             _api_delete(f"/schedule/block/{block['id']}")
         except Exception as exc:
-            print(f"[DEBUG] delete block {block['id']} failed: {exc}")
+            logger.warning("delete block %s failed: %s", block["id"], exc)
 
     _do_reorganize()
     day_label = _fmt_date(target)
@@ -322,7 +324,7 @@ def _clean_deadline(raw) -> Optional[str]:
         except ValueError:
             pass
     # Anything else (e.g. "6pm", "next Friday") is not a usable date — discard it
-    print(f"[DEBUG] deadline {s!r} not ISO-parseable, ignoring")
+    logger.debug("deadline %r not ISO-parseable, ignoring", s)
     return None
 
 
@@ -356,7 +358,7 @@ def _parse_deadline_text(text: str) -> tuple:
 
     # Fast path: skip phrases detected without calling Claude
     if _is_skip_deadline(lower):
-        print(f"[DEBUG] deadline: skip phrase detected in {text!r}")
+        logger.debug("deadline: skip phrase detected in %r", text)
         return (True, None)
 
     today = _today()
@@ -380,7 +382,7 @@ def _parse_deadline_text(text: str) -> tuple:
         )
         raw = resp.content[0].text.strip()
         raw = re.sub(r"^```\w*\s*|\s*```$", "", raw).strip()
-        print(f"[DEBUG] deadline text {text!r} → Claude returned {raw!r}")
+        logger.debug("deadline text %r → Claude returned %r", text, raw)
 
         parsed = json.loads(raw)
         dl = parsed.get("deadline")
@@ -397,7 +399,7 @@ def _parse_deadline_text(text: str) -> tuple:
         return (True, str(dl) + "T23:59:59")
 
     except Exception as exc:
-        print(f"[DEBUG] _parse_deadline_text failed: {exc}")
+        logger.warning("_parse_deadline_text failed: %s", exc)
         # Direct ISO date fallback (user typed "2026-06-01")
         try:
             date.fromisoformat(text.strip())
@@ -415,7 +417,7 @@ def _extract_duration_minutes(text: str) -> Optional[int]:
 
     Tries Claude first; regex digit-scan is always the final fallback.
     """
-    print(f"[DEBUG] _extract_duration_minutes called with: {text!r}")
+    logger.debug("_extract_duration_minutes called with: %r", text)
 
     # ── Claude attempt ────────────────────────────────────────────────────────
     claude_minutes: Optional[int] = None
@@ -439,9 +441,9 @@ def _extract_duration_minutes(text: str) -> Optional[int]:
         digit_match = re.search(r"\d+", raw)
         if digit_match:
             claude_minutes = int(digit_match.group())
-        print(f"[DEBUG] Claude duration result: {claude_minutes!r} from {text!r}")
+        logger.debug("Claude duration result: %r from %r", claude_minutes, text)
     except Exception as exc:
-        print(f"[DEBUG] _extract_duration_minutes Claude call failed: {exc}")
+        logger.warning("_extract_duration_minutes Claude call failed: %s", exc)
 
     if claude_minutes and claude_minutes > 0:
         return claude_minutes
@@ -450,10 +452,10 @@ def _extract_duration_minutes(text: str) -> Optional[int]:
     nums = [int(n) for n in re.findall(r"\d+", text)]
     if nums:
         minutes = max(nums)
-        print(f"[DEBUG] duration regex fallback: {minutes} min from {text!r}")
+        logger.debug("duration regex fallback: %d min from %r", minutes, text)
         return minutes
 
-    print(f"[DEBUG] _extract_duration_minutes: no number found in {text!r}")
+    logger.debug("_extract_duration_minutes: no number found in %r", text)
     return None
 
 
@@ -500,7 +502,7 @@ def _handle_my_schedule(say):
 
 def _handle_my_tasks(say):
     all_tasks = _api_get(f"/tasks/{USER_ID}")
-    print(f"[DEBUG] tasks API response: {all_tasks}")
+    logger.debug("tasks API response count: %d", len(all_tasks) if isinstance(all_tasks, list) else -1)
     ACTIVE_STATUSES = {"pending", "scheduled", "partial", "missed"}
     tasks = [t for t in all_tasks if t["status"] in ACTIVE_STATUSES]
     if not tasks:
@@ -581,11 +583,11 @@ def _complete_add_task(user_id: str, data: dict, say):
         "deadline": _clean_deadline(data.get("deadline")),
         "is_flexible": True,
     }
-    print(f"[DEBUG] POST /tasks/ payload: {payload}")
+    logger.debug("POST /tasks/ payload title=%r dur=%r", payload["title"], payload["duration_minutes"])
     try:
         resp = requests.post(f"{BASE_URL}/tasks/", json=payload, timeout=15)
         if not resp.ok:
-            print(f"[DEBUG] task save failed {resp.status_code}: {resp.text}")
+            logger.warning("task save failed %d: %s", resp.status_code, resp.text)
             resp.raise_for_status()
         task = resp.json()
     except requests.HTTPError as exc:
@@ -602,7 +604,7 @@ def _continue_add_task(user_id: str, text: str, say):
     if step == "ask_name":
         data["title"] = text.strip()
     elif step == "ask_duration":
-        print(f"[DEBUG] duration input: {text!r}")
+        logger.debug("duration input: %r", text)
         clean = text.strip()
         if clean.isdigit() and int(clean) > 0:
             data["duration_minutes"] = int(clean)
@@ -613,7 +615,7 @@ def _continue_add_task(user_id: str, text: str, say):
             else:
                 say("How many minutes will that take? (e.g. *45* or *60*)")
                 return
-        print(f"[DEBUG] duration extracted: {data['duration_minutes']}")
+        logger.debug("duration extracted: %r", data["duration_minutes"])
     elif step == "ask_priority":
         prio = text.lower().strip()
         if prio not in ("critical", "high", "medium", "low", "optional"):
@@ -623,11 +625,11 @@ def _continue_add_task(user_id: str, text: str, say):
     elif step == "ask_deadline":
         resolved, deadline = _parse_deadline_text(text)
         if not resolved:
-            print(f"[DEBUG] staying at ask_deadline, retrying")
+            logger.debug("staying at ask_deadline, retrying")
             say("I didn't catch that date. Try something like *tomorrow*, *Monday*, *May 30*, or say *no deadline*.")
             return  # state stays locked at ask_deadline — next message retries
         data["deadline"] = deadline
-        print(f"[DEBUG] deadline set: {deadline!r} from {text!r}")
+        logger.debug("deadline set: %r from %r", deadline, text)
     else:
         return
 
@@ -1058,7 +1060,7 @@ def _process_message(text: str, user_id: str, say, event: dict):
     in_flow = user_id in conversation_state
     lower = text.lower().strip()
 
-    print(f"[DEBUG] message received: {text!r} | state: {conversation_state.get(user_id)}")
+    logger.debug("message received: %r | state: %s", text, bool(conversation_state.get(user_id)))
 
     # Cancel always clears state regardless of whether we are mid-flow.
     if lower in _CANCEL_WORDS:
@@ -1073,12 +1075,12 @@ def _process_message(text: str, user_id: str, say, event: dict):
     # task while a previous flow was left open) overrides the stale state.
     # Short replies like bare numbers or single words parse as "unknown" and stay in the flow.
     if in_flow:
-        print(f"[DEBUG] mid-flow detected, checking for fresh-intent override")
+        logger.debug("mid-flow detected, checking for fresh-intent override")
         parsed = parse_intent(text, None)
         if parsed:
             intent = parsed.get("intent", "unknown")
             if intent not in ("unknown", "cancel_flow"):
-                print(f"[DEBUG] fresh intent {intent!r} overrides stale flow — clearing state")
+                logger.debug("fresh intent %r overrides stale flow — clearing state", intent)
                 conversation_state.pop(user_id, None)
                 _route_by_intent(intent, parsed.get("data") or {}, user_id, say, event)
                 return
@@ -1087,7 +1089,7 @@ def _process_message(text: str, user_id: str, say, event: dict):
         return
 
     parsed = parse_intent(text, None)
-    print(f"[DEBUG] parsed intent: {parsed}")
+    logger.debug("parsed intent: %s", parsed.get("intent") if parsed else "none")
 
     # Claude unavailable → graceful keyword fallback
     if not parsed:

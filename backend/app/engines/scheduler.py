@@ -4,6 +4,7 @@ Generates a full 7-day ScheduleBlock list for a user, working from a
 30-minute slot grid and inserting blocks in strict priority order.
 """
 import json
+import logging
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +17,8 @@ from app.models.task import Task
 from app.models.weekly_preferences import WeeklyPreferences
 
 # ── Constants ─────────────────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
 
 SLOTS_PER_DAY = 48          # 30-min slots: index 0 = 00:00 … 47 = 23:30
 GYM_DURATION_MINS = 75
@@ -124,7 +127,7 @@ def _get_ai_scheduling_hints(
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        print("[scheduler] ANTHROPIC_API_KEY not set — skipping AI scheduling hints")
+        logger.warning("ANTHROPIC_API_KEY not set — skipping AI scheduling hints")
         return {}
 
     system_prompt = (
@@ -157,7 +160,7 @@ def _get_ai_scheduling_hints(
         f'}}'
     )
 
-    print(f"[scheduler] Sending {len(task_data)} tasks to Claude for scheduling hints")
+    logger.info(f"Sending {len(task_data)} tasks to Claude for scheduling hints")
 
     try:
         from anthropic import Anthropic
@@ -169,7 +172,7 @@ def _get_ai_scheduling_hints(
             messages=[{"role": "user", "content": user_prompt}],
         )
         raw = response.content[0].text.strip()
-        print(f"[scheduler] Claude scheduling hints: {raw}")
+        logger.debug("Claude scheduling hints received")
 
         if "{" in raw and "}" in raw:
             json_str = raw[raw.index("{") : raw.rindex("}") + 1]
@@ -184,7 +187,7 @@ def _get_ai_scheduling_hints(
             return result
 
     except Exception as exc:
-        print(f"[scheduler] AI hint call failed (non-fatal): {exc}")
+        logger.warning(f"AI hint call failed (non-fatal): {exc}")
         return {t.title: "any" for t in tasks}
 
     return {t.title: "any" for t in tasks}
@@ -231,9 +234,7 @@ def generate_weekly_schedule(
         f"{schedule_start_dt.hour:02d}:{schedule_start_dt.minute:02d}"
     )
 
-    print(f"[scheduler] generation_ts={generation_timestamp} "
-          f"schedule_start={schedule_start_date} slot={schedule_start_slot} "
-          f"({slot_to_time(schedule_start_slot)})")
+    logger.info(f"schedule_start={schedule_start_date} slot={schedule_start_slot}")
 
     # ── Step 1: Load inputs ───────────────────────────────────────────────────
     prefs: Optional[WeeklyPreferences] = (
@@ -275,15 +276,34 @@ def generate_weekly_schedule(
         .all()
     )
 
-    # Debug: log all tasks and their fixed/flexible status (Bug 1)
-    print(f"[scheduler] Total tasks loaded: {len(tasks)}")
-    for t in tasks:
-        print(
-            f"[scheduler]   '{t.title}': is_flexible={t.is_flexible}, "
-            f"fixed_start_time={getattr(t, 'fixed_start_time', None)}, "
-            f"fixed_end_time={getattr(t, 'fixed_end_time', None)}, "
-            f"preferred_days={getattr(t, 'preferred_days', None)}"
+    # Filter out tasks whose deadline has already passed; mark them expired in DB.
+    _today = date.today()
+    _expired_ids: List[int] = []
+    _valid_tasks: List[Task] = []
+    for _t in tasks:
+        if _t.deadline is not None:
+            try:
+                if isinstance(_t.deadline, str):
+                    _dl = date.fromisoformat(_t.deadline[:10])
+                elif hasattr(_t.deadline, "date"):
+                    _dl = _t.deadline.date()
+                else:
+                    _dl = date.fromisoformat(str(_t.deadline)[:10])
+                if _dl < _today:
+                    _expired_ids.append(_t.id)
+                    continue
+            except Exception:
+                pass
+        _valid_tasks.append(_t)
+    if _expired_ids:
+        db.query(Task).filter(Task.id.in_(_expired_ids)).update(
+            {"status": "expired"}, synchronize_session=False
         )
+        db.flush()
+        logger.warning(f"Marked {len(_expired_ids)} task(s) as expired (past deadline)")
+    tasks = _valid_tasks
+
+    logger.info(f"Total tasks loaded: {len(tasks)}")
 
     # ── AI scheduling hints from user's plain-language notes ──────────────────
     scheduling_notes = p("scheduling_notes", None) or ""
@@ -317,6 +337,8 @@ def generate_weekly_schedule(
 
     wake_slot           = time_to_slot(preferred_wake_time)
     bed_slot            = time_to_slot(preferred_bedtime)
+    if bed_slot == 0:
+        bed_slot = SLOTS_PER_DAY  # midnight bedtime: treat as end-of-day
     routine_slots       = slots_needed(morning_routine_mins)
     night_routine_slots = slots_needed(night_routine_mins)
     commute_slots       = slots_needed(commute_minutes)
@@ -337,6 +359,9 @@ def generate_weekly_schedule(
         if d_date == schedule_start_date and schedule_start_slot > wake_slot:
             mark_occupied(time_map, d, wake_slot, schedule_start_slot - wake_slot)
 
+    # Snapshot before fixed-task pre-marking — used in step 3g to detect overlapping fixed tasks.
+    time_map_baseline: List[List[bool]] = [row[:] for row in time_map]
+
     # ── Bug 1 fix: Pre-mark fixed task slots so meals/gym won't land there ────
     # This runs AFTER sleep is marked but BEFORE per-day blocks (meals, commute, gym).
     sorted_tasks = sorted(tasks, key=lambda t: PRIORITY_ORDER.get(t.priority, 99))
@@ -346,7 +371,7 @@ def generate_weekly_schedule(
     flexible_tasks = [t for t in sorted_tasks
                       if t.is_flexible or not getattr(t, "fixed_start_time", None)]
 
-    print(f"[scheduler] Fixed tasks: {len(fixed_tasks)}, Flexible tasks: {len(flexible_tasks)}")
+    logger.info(f"Fixed tasks: {len(fixed_tasks)}, Flexible: {len(flexible_tasks)}")
 
     for _ft in fixed_tasks:
         try:
@@ -373,8 +398,7 @@ def generate_weekly_schedule(
             # Only pre-mark during waking hours so we don't disturb sleep marks
             if _fs >= wake_slot and (_fs + _fn) <= bed_slot:
                 mark_occupied(time_map, _di, _fs, _fn)
-                print(f"[scheduler]   Pre-marked '{_ft.title}' on {_dn} "
-                      f"slots {_fs}-{_fs+_fn} ({slot_to_time(_fs)}–{slot_to_time(_fs+_fn)})")
+                logger.debug(f"Pre-marked fixed task on {_dn} slots {_fs}-{_fs+_fn}")
 
     # ── Step 3: Insert blocks ─────────────────────────────────────────────────
     blocks: List[ScheduleBlock] = []
@@ -526,7 +550,7 @@ def generate_weekly_schedule(
             pass
 
         if not days_list:
-            print(f"[scheduler] Fixed task '{task.title}' has no preferred_days — skipping")
+            logger.warning(f"Fixed task id={task.id} has no preferred_days — skipping")
             unscheduled_tasks.append(task)
             continue
 
@@ -545,8 +569,19 @@ def generate_weekly_schedule(
 
             # Reject if task falls entirely outside waking hours (user error)
             if start_slot < wake_slot or (start_slot + task_n) > bed_slot:
-                print(f"[scheduler] Fixed task '{task.title}' on {day_name} "
-                      f"falls outside waking hours — skipping day")
+                logger.warning(f"Fixed task id={task.id} on {day_name} falls outside waking hours")
+                continue
+
+            # Check for conflicts with other fixed tasks (FIX 1)
+            _conflict = False
+            for _s in range(start_slot, min(start_slot + task_n, SLOTS_PER_DAY)):
+                if time_map[day_idx][_s] and not time_map_baseline[day_idx][_s]:
+                    _conflict = True
+                    break
+            if _conflict:
+                logger.warning(
+                    f"Fixed task id={task.id} on {day_name} conflicts with another fixed task — skipping"
+                )
                 continue
 
             # Slots are pre-reserved in step 2; just create the block.
@@ -563,8 +598,7 @@ def generate_weekly_schedule(
                                   start_slot, task_n,
                                   task_id=task.id, priority=task.priority,
                                   is_locked=True))
-            print(f"[scheduler] Placed fixed task '{task.title}' on {day_name} "
-                  f"{slot_to_time(start_slot)}–{slot_to_time(start_slot + task_n)}")
+            logger.info(f"Placed fixed task id={task.id} on {day_name}")
 
             # Commute block after task
             if task_commute_n > 0:
@@ -584,7 +618,11 @@ def generate_weekly_schedule(
     AFTERNOON_END = time_to_slot("17:00")
 
     for task in flexible_tasks:
-        task_n = slots_needed(task.duration_minutes)
+        _dur = task.duration_minutes or 0
+        if _dur <= 0:
+            logger.warning(f"Task id={task.id} has duration={_dur}, defaulting to 30 min")
+            _dur = 30
+        task_n = slots_needed(_dur)
         task_commute_mins = getattr(task, "commute_minutes", 0) or 0
         task_commute_n    = slots_needed(task_commute_mins) if task_commute_mins else 0
         total_n = task_commute_n + task_n + task_commute_n
@@ -653,9 +691,12 @@ def generate_weekly_schedule(
                     break
 
         if fill_task is not None:
-            print(f"[scheduler] Filling remaining free slots with '{fill_task.title}'")
+            logger.info(f"Filling remaining free slots with task id={fill_task.id}")
+            # Avoid duplicating days where normal scheduling already placed this task.
+            fill_placed_dates = {b.date for b in blocks if b.task_id == fill_task.id}
             extra_placed = 0
             MAX_EXTRA = 4
+            MAX_PER_DAY = 3
             fill_slots = slots_needed(120)  # 2-hour fill blocks
 
             for day_idx in range(7):
@@ -664,9 +705,11 @@ def generate_weekly_schedule(
                 day_date = week_start_date + timedelta(days=day_idx)
                 if day_date < schedule_start_date:
                     continue
-                # Keep scanning each day for consecutive free 2-hour windows
+                if day_date in fill_placed_dates:
+                    continue  # already has a block from normal scheduling
+                day_fill_count = 0
                 scan_from = wake_slot + routine_slots
-                while extra_placed < MAX_EXTRA:
+                while extra_placed < MAX_EXTRA and day_fill_count < MAX_PER_DAY:
                     ts = find_free_slot(time_map, day_idx, fill_slots,
                                         start_from=scan_from,
                                         end_before=night_routine_start)
@@ -678,10 +721,10 @@ def generate_weekly_schedule(
                                           task_id=fill_task.id,
                                           priority=fill_task.priority))
                     extra_placed += 1
+                    day_fill_count += 1
                     scan_from = ts + fill_slots
         else:
-            print(f"[scheduler] fill_remaining_with='{_fill_target_title}' "
-                  f"but no matching task found")
+            logger.warning("fill_remaining_with specified but no matching task found")
 
     # ── Deep work blocks — fill remaining free slots when enabled ────────────
     dw_enabled: bool = bool(p("deep_work_enabled", False))
@@ -690,7 +733,7 @@ def generate_weekly_schedule(
         dw_slots = slots_needed(dw_session_mins)
         LATE_CUTOFF = time_to_slot("21:00")  # never schedule deep work at or after 21:00
         MAX_DW_PER_DAY = 4
-        print(f"[scheduler] Deep work enabled — session {dw_session_mins} min ({dw_slots} slots)")
+        logger.info(f"Deep work enabled: {dw_session_mins} min sessions")
 
         for day_idx in range(7):
             day_date = week_start_date + timedelta(days=day_idx)
@@ -780,9 +823,18 @@ def reorganize_missed_task(
         return {"rescheduled": False, "reason": "optional_dropped", "task_title": task.title}
 
     deadline_date: Optional[date] = None
-    if task.deadline:
-        deadline_date = task.deadline.date() if hasattr(task.deadline, "date") else today
-        if deadline_date < today:
+    if task.deadline is not None:
+        try:
+            if isinstance(task.deadline, str):
+                deadline_date = date.fromisoformat(task.deadline[:10])
+            elif hasattr(task.deadline, "date"):
+                deadline_date = task.deadline.date()
+            else:
+                deadline_date = date.fromisoformat(str(task.deadline)[:10])
+        except Exception:
+            logger.warning(f"Could not parse deadline for task id={task.id}: {task.deadline!r}")
+            deadline_date = None
+        if deadline_date is not None and deadline_date < today:
             return {"rescheduled": False, "reason": "deadline_passed", "task_title": task.title}
 
     week_end   = today + timedelta(days=6 - today.weekday())

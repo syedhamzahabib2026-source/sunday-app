@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 import time as _time
@@ -5,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import users, weekly_preferences, tasks, schedule_blocks, completions, schedules
 from app.routers import locations, auth as auth_router
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Sunday API", version="2.0.0")
 
@@ -50,10 +53,10 @@ def _lifecycle_loop():
                 )
                 if updated:
                     db.commit()
-                    print(f"[lifecycle] Activated {updated} pending schedule(s) for {next_monday}")
+                    logger.info("Activated %d pending schedule(s) for %s", updated, next_monday)
                 db.close()
         except Exception as e:
-            print(f"[lifecycle] Background error: {e}")
+            logger.error("Lifecycle background error: %s", e)
 
 
 @app.on_event("startup")
@@ -62,7 +65,7 @@ def on_startup():
     run_migrations()
     t = threading.Thread(target=_lifecycle_loop, daemon=True)
     t.start()
-    print("[startup] Lifecycle activation thread started")
+    logger.info("Lifecycle activation thread started")
 
 
 @app.get("/health")

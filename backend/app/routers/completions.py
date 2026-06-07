@@ -18,6 +18,12 @@ def create_completion(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    block = db.query(ScheduleBlock).filter(
+        ScheduleBlock.id == payload.schedule_block_id,
+        ScheduleBlock.user_id == current_user.id,
+    ).first()
+    if not block:
+        raise HTTPException(status_code=403, detail="Schedule block not found or access denied")
     record = CompletionRecord(**payload.model_dump(), user_id=current_user.id)
     db.add(record)
     db.commit()

@@ -77,6 +77,18 @@ def get_latest_preferences(
         raise HTTPException(status_code=500, detail=f"Failed to fetch preferences: {e}")
 
 
+_PREF_RANGES: dict = {
+    "sleep_target_hours":           (0, 16),
+    "gym_days_per_week":            (0, 7),
+    "meals_per_day":                (0, 6),
+    "commute_minutes":              (0, 240),
+    "morning_routine_minutes":      (0, 480),
+    "deep_work_session_minutes":    (0, 480),
+    "focus_block_duration_minutes": (0, 480),
+    "task_buffer_minutes":          (0, 480),
+}
+
+
 @router.put("/{pref_id}", response_model=WeeklyPreferencesResponse)
 def update_preferences(
     pref_id: int,
@@ -93,6 +105,12 @@ def update_preferences(
             raise HTTPException(status_code=404, detail="Preferences not found")
 
         updates = payload.model_dump(exclude_none=True)
+        for field, (lo, hi) in _PREF_RANGES.items():
+            if field in updates and not (lo <= updates[field] <= hi):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{field} must be between {lo} and {hi}",
+                )
         if "meal_prep_days" in updates:
             updates["meal_prep_days"] = json.dumps(updates["meal_prep_days"])
         if "fixed_commitments" in updates:

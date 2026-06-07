@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -95,7 +95,7 @@ def lock_block(
 
 
 class BlockStatusUpdate(BaseModel):
-    status: str  # complete / missed / skipped
+    status: Literal["scheduled", "complete", "missed", "skipped", "cancelled"]
 
 
 @router.patch("/block/{block_id}/status", response_model=ScheduleBlockResponse)
