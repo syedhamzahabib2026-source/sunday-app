@@ -248,7 +248,7 @@ export default function BlockCard({
                   key={`${a.id}-${a.label}`}
                   onClick={() => onAction?.(block.id, block.task_id, a.id)}
                   title={a.title}
-                  className={`flex items-center gap-1 text-[12px] font-semibold border rounded-lg px-2.5 py-1.5 transition-colors ${BTN[a.style]}`}
+                  className={`flex items-center gap-1.5 text-[13px] font-semibold border rounded-lg px-3 py-2 min-h-[44px] transition-colors ${BTN[a.style]}`}
                 >
                   <span>{a.icon}</span> {a.label}
                 </button>

@@ -204,7 +204,8 @@ export default function WeekPage() {
       try {
         const result = await reorganizeMissed(blockId);
         if (result.rescheduled && result.new_date) {
-          showToast(`Task rescheduled to ${result.new_date}`);
+          const fmtDate = new Date(result.new_date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+          showToast(`Task rescheduled to ${fmtDate}`);
         } else {
           showToast(`Task couldn't be rescheduled — no slot found this week`, "error");
         }

@@ -335,7 +335,11 @@ export default function TodayPage() {
     return nowMins >= startM && nowMins < endM;
   }
 
-  if (authLoading || !user) return null;
+  if (authLoading || !user) return (
+    <div className="fixed inset-0 bg-zinc-950 flex items-center justify-center">
+      <div className="w-10 h-10 rounded-full border-4 border-zinc-700 border-t-indigo-500 animate-spin" />
+    </div>
+  );
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-8 pb-20 page-fade">

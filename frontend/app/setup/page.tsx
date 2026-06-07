@@ -295,14 +295,14 @@ function Stepper({ label, value, onChange, min = 0, max = 180, step = 5, unit = 
       <span className="text-[15px] text-gray-700">{label}</span>
       <div className="flex items-center gap-3">
         <button type="button" onClick={() => onChange(Math.max(min, value - step))}
-          className="w-9 h-9 rounded-full border border-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-50 transition-colors select-none text-lg">
+          className="w-11 h-11 rounded-full border border-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-50 transition-colors select-none text-lg">
           −
         </button>
         <span className="text-[15px] font-medium text-gray-900 w-20 text-center tabular-nums">
           {value} {unit}
         </span>
         <button type="button" onClick={() => onChange(Math.min(max, value + step))}
-          className="w-9 h-9 rounded-full border border-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-50 transition-colors select-none text-lg">
+          className="w-11 h-11 rounded-full border border-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-50 transition-colors select-none text-lg">
           +
         </button>
       </div>
@@ -1102,15 +1102,34 @@ function DraftTaskForm({ onAdd, onUpdate, onCancel, mode, initialTask, savedLoca
       <div>
         <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Priority</p>
         <div className="flex flex-wrap gap-2">
-          {PRIORITIES.map(p => (
-            <button key={p} type="button" onClick={() => setPriority(p)}
+          {([
+            { p: "critical" as Priority, desc: "Must happen this week" },
+            { p: "high"     as Priority, desc: "Important, schedule early" },
+            { p: "medium"   as Priority, desc: "Fit in when possible" },
+            { p: "low"      as Priority, desc: "Only if there's time" },
+            { p: "optional" as Priority, desc: "Nice to have" },
+          ]).map(({ p: pv, desc }) => (
+            <button key={pv} type="button" onClick={() => setPriority(pv)}
+              title={desc}
               className={`px-3 py-1.5 rounded-full text-[13px] font-medium border capitalize transition-all ${
-                priority === p ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                priority === pv ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
               }`}>
-              {p}
+              {pv}
             </button>
           ))}
         </div>
+        {(() => {
+          const map: Record<string, string> = {
+            critical: "Must happen this week",
+            high: "Important, schedule early",
+            medium: "Fit in when possible",
+            low: "Only if there's time",
+            optional: "Nice to have",
+          };
+          return priority in map ? (
+            <p className="text-[12px] text-gray-400 mt-1.5">{map[priority]}</p>
+          ) : null;
+        })()}
       </div>
 
       {/* Deadline */}
@@ -1138,18 +1157,18 @@ function DraftTaskForm({ onAdd, onUpdate, onCancel, mode, initialTask, savedLoca
       {/* Timing */}
       <div>
         <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Timing</p>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           {([
             { id: "ai"     as const, emoji: "🤖", label: "AI picks the time" },
             { id: "manual" as const, emoji: "🕐", label: "I have a preference" },
             { id: "fixed"  as const, emoji: "📌", label: "Fixed time" },
           ]).map(opt => (
             <button key={opt.id} type="button" onClick={() => setTimingMode(opt.id)}
-              className={`p-3 rounded-xl border-2 text-left transition-all ${
+              className={`p-3 rounded-xl border-2 text-left transition-all flex sm:block items-center gap-3 ${
                 timingMode === opt.id ? "border-indigo-600 bg-indigo-50" : "border-gray-200 bg-white hover:border-gray-300"
               }`}>
-              <span className="text-lg">{opt.emoji}</span>
-              <div className={`text-[12px] font-medium mt-1 ${timingMode === opt.id ? "text-indigo-700" : "text-gray-600"}`}>
+              <span className="text-lg shrink-0">{opt.emoji}</span>
+              <div className={`text-[13px] font-medium sm:mt-1 ${timingMode === opt.id ? "text-indigo-700" : "text-gray-600"}`}>
                 {opt.label}
               </div>
             </button>
@@ -1730,7 +1749,7 @@ function ReviewStep({ data, set, mode, weekTarget }: {
           <span className="text-xl">🧠</span>
           <div className="flex-1">
             <p className="text-[15px] font-semibold text-gray-900">Fill free time with deep work</p>
-            <p className="text-[13px] text-gray-500">Sunday fills your free slots automatically.</p>
+            <p className="text-[13px] text-gray-500">Empty slots in your schedule will be filled with focused work blocks.</p>
           </div>
           <Toggle
             checked={data.deep_work_enabled}
@@ -1740,6 +1759,7 @@ function ReviewStep({ data, set, mode, weekTarget }: {
         {data.deep_work_enabled && (
           <div className="mt-4 fade-in">
             <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Session duration</p>
+            <p className="text-[12px] text-gray-400 mb-3">Length of each deep work block</p>
             <div className="flex gap-2 flex-wrap">
               {[60, 90, 120, 180].map(m => (
                 <button
@@ -1853,19 +1873,19 @@ function DoneScreen({ weekTarget }: { weekTarget: "current" | "next" }) {
         </svg>
       </div>
       <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-4 tracking-tight">
-        {isNext ? "Next week is locked in." : "Your week is protected."}
+        {isNext ? "Next week is locked in." : "Your schedule is ready."}
       </h1>
       <p className="text-[16px] text-gray-500 mb-12 leading-relaxed">
         {isNext
           ? "Goes live automatically on Sunday at 12:00 AM."
-          : "Sunday generates your first schedule on Sunday."}
+          : "Your week is built. View it now."}
       </p>
       <button
         type="button"
-        onClick={() => router.push(isNext ? "/week?preview=next" : "/week")}
+        onClick={() => router.push(isNext ? "/week?preview=next" : "/today")}
         className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-indigo-600 text-white text-[16px] font-semibold hover:bg-indigo-700 transition-colors"
       >
-        {isNext ? "Preview next week →" : "View this week →"}
+        {isNext ? "Preview next week →" : "View today's schedule →"}
       </button>
     </div>
   );
@@ -1879,6 +1899,8 @@ function DraftPrompt({ draft, onResume, onDiscard }: {
   onDiscard: () => void;
 }) {
   const taskCount = draft.data.tasks.length;
+  const shownTasks = draft.data.tasks.slice(0, 5);
+  const extraCount = taskCount - shownTasks.length;
   return (
     <div className="w-full max-w-lg mx-auto fade-in">
       <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-6 text-2xl">
@@ -1890,11 +1912,16 @@ function DraftPrompt({ draft, onResume, onDiscard }: {
       <p className="text-[16px] text-gray-500 mb-2 leading-relaxed">
         From {formatDraftDate(draft.savedAt)}
       </p>
-      <p className="text-[14px] text-gray-400 mb-10">
-        {taskCount > 0
-          ? `${taskCount} task${taskCount !== 1 ? "s" : ""} added · ${draft.mode} mode · step ${draft.step}`
-          : `${draft.mode} mode · step ${draft.step}`}
+      <p className="text-[14px] text-gray-400 mb-2">
+        {draft.mode} mode · step {draft.step}
       </p>
+      {taskCount > 0 && (
+        <p className="text-[14px] text-gray-500 mb-10">
+          {taskCount} task{taskCount !== 1 ? "s" : ""}: {shownTasks.map(t => t.title).join(", ")}
+          {extraCount > 0 && ` +${extraCount} more`}
+        </p>
+      )}
+      {taskCount === 0 && <div className="mb-10" />}
 
       <div className="space-y-3">
         <button
@@ -2314,7 +2341,7 @@ export default function SetupPage() {
       )}
 
       {/* Content */}
-      <div className="min-h-screen flex flex-col items-center justify-center px-6 py-24">
+      <div className="min-h-screen flex flex-col items-center justify-center px-6 pt-24 pb-32">
         {done ? (
           <DoneScreen weekTarget={weekTarget} />
         ) : draft !== null && draftChecked ? (

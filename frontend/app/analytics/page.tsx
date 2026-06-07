@@ -109,7 +109,23 @@ export default function AnalyticsPage() {
     return total === 0 ? 0 : Math.round(((priorityCompletedCount[p] ?? 0) / total) * 100);
   }
 
+  // Current week monday (YYYY-MM-DD)
+  const currentMonday = (() => {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    const dow = d.getDay();
+    d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  })();
+  const nextMonday = (() => {
+    const d = new Date(currentMonday + "T00:00:00");
+    d.setDate(d.getDate() + 7);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  })();
+  const hasActiveThisWeek = schedules.some(s => s.week_start_date === currentMonday && (s.status === "active" || s.status === "archived"));
+  const hasNextWeek = schedules.some(s => s.week_start_date === nextMonday);
+
   // FIX 5: real consecutive-week streak from archived schedule dates
+  // FIX 10: include current week if active schedule exists
   const sortedSchedules = [...schedules]
     .filter(s => s.week_start_date)
     .sort((a, b) => new Date(b.week_start_date).getTime() - new Date(a.week_start_date).getTime());
@@ -120,6 +136,10 @@ export default function AnalyticsPage() {
     const diffDays = Math.round((curr.getTime() - prev.getTime()) / 86400000);
     if (diffDays === 7) consecutiveWeeks++;
     else break;
+  }
+  // If the most recent schedule isn't the current week but current week has an active schedule, add 1
+  if (hasActiveThisWeek && sortedSchedules.length > 0 && sortedSchedules[0].week_start_date !== currentMonday) {
+    consecutiveWeeks += 1;
   }
 
   // FIX 4: real heatmap from completion records grouped by day of week
@@ -319,6 +339,21 @@ export default function AnalyticsPage() {
               Completion trends, day patterns, and schedule confidence become meaningful after several weeks of consistent use.
             </p>
           </div>
+
+          {!hasNextWeek && (
+            <div className="bg-white border border-zinc-200 rounded-xl px-5 py-4 flex items-center justify-between gap-4 shadow-sm">
+              <div>
+                <p className="text-[14px] font-semibold text-zinc-900 mb-0.5">Ready for next week?</p>
+                <p className="text-[13px] text-zinc-500">Set up your schedule before the week starts.</p>
+              </div>
+              <a
+                href="/setup?week=next"
+                className="shrink-0 px-4 py-2 rounded-xl bg-indigo-600 text-white text-[13px] font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap"
+              >
+                Plan next week →
+              </a>
+            </div>
+          )}
         </div>
       )}
     </div>
