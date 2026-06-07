@@ -63,6 +63,7 @@ export default function AnalyticsPage() {
   const [schedules, setSchedules] = useState<ScheduleRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAllHistory, setShowAllHistory] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -91,6 +92,22 @@ export default function AnalyticsPage() {
     complete: completionRate,
     missed: completions.length === 0 ? 0 : Math.round((completions.filter(c => c.status === "missed").length / completions.length) * 100),
   };
+
+  // FIX 13: real completion rate per priority level from actual completion records
+  const taskPriorityMap = new Map(tasks.map(t => [t.id, t.priority]));
+  const priorityCompletedCount: Record<string, number> = {};
+  const priorityTotalCount: Record<string, number> = {};
+  for (const c of completions) {
+    if (c.task_id == null) continue;
+    const p = taskPriorityMap.get(c.task_id);
+    if (!p) continue;
+    priorityTotalCount[p] = (priorityTotalCount[p] ?? 0) + 1;
+    if (c.status === "complete") priorityCompletedCount[p] = (priorityCompletedCount[p] ?? 0) + 1;
+  }
+  function priorityRate(p: string): number {
+    const total = priorityTotalCount[p] ?? 0;
+    return total === 0 ? 0 : Math.round(((priorityCompletedCount[p] ?? 0) / total) * 100);
+  }
 
   // FIX 5: real consecutive-week streak from archived schedule dates
   const sortedSchedules = [...schedules]
@@ -199,8 +216,8 @@ export default function AnalyticsPage() {
           {/* Task status breakdown */}
           {Object.keys(statusCounts).length > 0 && (
             <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm">
-              <h2 className="text-[14px] font-semibold text-zinc-900 mb-1">Task status breakdown</h2>
-              <p className="text-[12px] text-zinc-400 mb-5">Color: green ≥80% · amber ≥60% · red below</p>
+              <h2 className="text-[14px] font-semibold text-zinc-900 mb-1">Task inventory</h2>
+              <p className="text-[12px] text-zinc-400 mb-5">Where your tasks are right now · color: green ≥80% · amber ≥60% · red below</p>
               <div className="space-y-3">
                 {Object.entries(statusCounts).sort(([, a], [, b]) => b - a).map(([status, count]) => (
                   <HBar key={status} label={status} value={count} max={maxStatus} pct={statusPcts[status] ?? 50} />
@@ -220,7 +237,7 @@ export default function AnalyticsPage() {
                     <HBar
                       key={priority} label={priority}
                       value={priorityCounts[priority]} max={maxPriority}
-                      pct={priority === "critical" ? 100 : priority === "high" ? 80 : priority === "medium" ? 65 : 40}
+                      pct={priorityRate(priority)}
                     />
                   ))}
               </div>
@@ -267,17 +284,32 @@ export default function AnalyticsPage() {
             <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm">
               <h2 className="text-[14px] font-semibold text-zinc-900 mb-5">Schedule history</h2>
               <div className="divide-y divide-zinc-100">
-                {schedules.slice(0, 8).map(s => (
-                  <div key={s.id} className="flex items-center justify-between py-3 hover:bg-zinc-50 -mx-2 px-2 rounded-lg transition-colors">
+                {(showAllHistory ? schedules : schedules.slice(0, 8)).map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => router.push(`/week?date=${s.week_start_date}`)}
+                    className="w-full flex items-center justify-between py-3 hover:bg-zinc-50 -mx-2 px-2 rounded-lg transition-colors text-left"
+                  >
                     <span className="text-[14px] font-medium text-zinc-700">{s.week_label ?? s.week_start_date}</span>
-                    <span className={`text-[11px] font-semibold rounded-full px-2.5 py-0.5 capitalize ${
-                      s.status === "archived" ? "bg-zinc-100 text-zinc-500"
-                      : s.status === "active" ? "bg-indigo-50 text-indigo-600"
-                      : "bg-amber-50 text-amber-600"
-                    }`}>{s.status}</span>
-                  </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[11px] font-semibold rounded-full px-2.5 py-0.5 capitalize ${
+                        s.status === "archived" ? "bg-zinc-100 text-zinc-500"
+                        : s.status === "active" ? "bg-indigo-50 text-indigo-600"
+                        : "bg-amber-50 text-amber-600"
+                      }`}>{s.status}</span>
+                      <span className="text-[11px] text-zinc-300">→</span>
+                    </div>
+                  </button>
                 ))}
               </div>
+              {schedules.length > 8 && (
+                <button
+                  onClick={() => setShowAllHistory(p => !p)}
+                  className="mt-3 text-[13px] font-medium text-indigo-600 hover:text-indigo-700 transition-colors"
+                >
+                  {showAllHistory ? "Show less" : `Load ${schedules.length - 8} more`}
+                </button>
+              )}
             </div>
           )}
 

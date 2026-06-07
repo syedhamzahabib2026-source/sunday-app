@@ -3,6 +3,7 @@
 import {
   Moon, Utensils, Dumbbell, Car, Sunrise,
   Briefcase, Flame, CheckCircle2, Zap,
+  ChevronRight, ChevronDown,
 } from "lucide-react";
 import { ScheduleBlock } from "@/lib/api";
 
@@ -80,6 +81,7 @@ interface ActionDef {
   label: string;
   icon: string;
   style: "green" | "zinc" | "red";
+  title?: string;
 }
 
 const BTN: Record<string, string> = {
@@ -98,18 +100,18 @@ function getActions(bt: string, isTask: boolean): ActionDef[] {
   ];
   if (isTask) return [
     { id: "done", label: "Complete", icon: "✓", style: "green" },
-    { id: "skip", label: "Skip",     icon: "⟳", style: "zinc"  },
+    { id: "skip", label: "Skip",     icon: "⏭", style: "zinc",  title: "Won't be rescheduled" },
     { id: "miss", label: "Miss",     icon: "✗", style: "red"   },
   ];
   if (bt === "gym" || bt === "muay_thai") return [
     { id: "done", label: "Done",   icon: "✓", style: "green" },
-    { id: "skip", label: "Skip",   icon: "⟳", style: "zinc"  },
+    { id: "skip", label: "Skip",   icon: "⏭", style: "zinc",  title: "Won't be rescheduled" },
     { id: "miss", label: "Missed", icon: "✗", style: "red"   },
   ];
   // commute, event, buffer
   return [
     { id: "done", label: "Done", icon: "✓", style: "green" },
-    { id: "skip", label: "Skip", icon: "⟳", style: "zinc"  },
+    { id: "skip", label: "Skip", icon: "⏭", style: "zinc",  title: "Won't be rescheduled" },
   ];
 }
 
@@ -222,6 +224,12 @@ export default function BlockCard({
               opacity: completed ? 0.5 : 1,
             }}
           />
+          {/* FIX 1: chevron affordance — indicates the card is tappable */}
+          {isClickable && (
+            isExpanded
+              ? <ChevronDown className="w-3.5 h-3.5 shrink-0 text-zinc-300" />
+              : <ChevronRight className="w-3.5 h-3.5 shrink-0 text-zinc-300" />
+          )}
         </div>
 
         {/* Accordion panel */}
@@ -239,6 +247,7 @@ export default function BlockCard({
                 <button
                   key={`${a.id}-${a.label}`}
                   onClick={() => onAction?.(block.id, block.task_id, a.id)}
+                  title={a.title}
                   className={`flex items-center gap-1 text-[12px] font-semibold border rounded-lg px-2.5 py-1.5 transition-colors ${BTN[a.style]}`}
                 >
                   <span>{a.icon}</span> {a.label}

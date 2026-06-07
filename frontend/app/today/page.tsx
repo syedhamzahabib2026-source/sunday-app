@@ -144,6 +144,7 @@ export default function TodayPage() {
 
   const [blocks, setBlocks] = useState<ScheduleBlock[]>([]);
   const [completedIds, setCompletedIds] = useState<Set<number>>(new Set());
+  const [skippedIds,   setSkippedIds]   = useState<Set<number>>(new Set());
   const [missedIds,    setMissedIds]    = useState<Set<number>>(new Set());
   const [expandedId,   setExpandedId]   = useState<number | null>(null);
   const [toasts,       setToasts]       = useState<ToastMsg[]>([]);
@@ -151,7 +152,11 @@ export default function TodayPage() {
   const [error, setError] = useState<string | null>(null);
   const [overloaded, setOverloaded] = useState(false);
   const [showStickyBar, setShowStickyBar] = useState(false);
+  // FIX 4: reactive nowMins — updated by interval so NowLine and current-block highlight stay accurate
+  const [nowMins, setNowMins] = useState(() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); });
   const statsRef = useRef<HTMLDivElement>(null);
+  // FIX 8: ref to scroll to NowLine on load
+  const nowLineRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -160,12 +165,15 @@ export default function TodayPage() {
       const data = await getTodaySchedule(viewingDateStr);
       setBlocks(data);
       const completed = new Set<number>();
+      const skipped   = new Set<number>();
       const missed    = new Set<number>();
       for (const b of data) {
-        if (b.status === "complete" || b.status === "skipped") completed.add(b.id);
+        if (b.status === "complete") completed.add(b.id);
+        else if (b.status === "skipped") { completed.add(b.id); skipped.add(b.id); }
         else if (b.status === "missed") missed.add(b.id);
       }
       setCompletedIds(completed);
+      setSkippedIds(skipped);
       setMissedIds(missed);
       // FIX 7: restore overload banner from localStorage (set by setup wizard after generation)
       const monday = getWeekMondayStr(viewingDateStr);
@@ -203,6 +211,23 @@ export default function TodayPage() {
     return () => observer.disconnect();
   }, [loading]);
 
+  useEffect(() => {
+    if (!isViewingToday) return;
+    const interval = setInterval(() => {
+      const n = new Date();
+      setNowMins(n.getHours() * 60 + n.getMinutes());
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [isViewingToday]);
+
+  useEffect(() => {
+    if (loading || !isViewingToday || blocks.length === 0) return;
+    const t = setTimeout(() => {
+      nowLineRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [loading, isViewingToday, blocks.length]);
+
   function showToast(message: string, type: "success" | "error" = "success") {
     const id = Date.now();
     setToasts(prev => [...prev, { id, message, type }]);
@@ -227,7 +252,8 @@ export default function TodayPage() {
         console.error("[Sunday] Block status update failed:", e)
       );
       if (action === "done" || action === "skip") setCompletedIds(prev => new Set(prev).add(blockId));
-      else if (action === "miss") setMissedIds(prev => new Set(prev).add(blockId));
+      if (action === "skip") setSkippedIds(prev => new Set(prev).add(blockId));
+      if (action === "miss") setMissedIds(prev => new Set(prev).add(blockId));
       return;
     }
 
@@ -240,6 +266,12 @@ export default function TodayPage() {
       setCompletedIds(prev => new Set(prev).add(blockId));
       const r = await reorganize("task_complete");
       setOverloaded(r.is_overloaded);
+      if (r.tasks_rescheduled.length > 0) {
+        const n = r.tasks_rescheduled.length;
+        showToast(`Schedule updated — ${n} task${n !== 1 ? "s" : ""} adjusted`);
+      } else {
+        showToast("Marked complete ✓");
+      }
     } else if (action === "skip") {
       updateBlockStatus(blockId, "skipped").catch(e =>
         console.error("[Sunday] Block status update failed:", e)
@@ -272,7 +304,8 @@ export default function TodayPage() {
   }
 
   const taskBlocks = blocks.filter(b => b.block_type === "task");
-  const completedCount = completedIds.size;
+  // FIX 2: only count truly completed tasks (not skipped) in the done stat
+  const completedCount = taskBlocks.filter(b => completedIds.has(b.id) && !skippedIds.has(b.id)).length;
   const totalMins = blocks.reduce((s, b) => s + blockMins(b), 0);
   const hoursScheduled = Math.round(totalMins / 60 * 10) / 10;
   const completionRate = taskBlocks.length === 0 ? 0 : Math.round((completedCount / taskBlocks.length) * 100);
@@ -284,8 +317,7 @@ export default function TodayPage() {
     { morning: [], afternoon: [], evening: [] }
   );
 
-  // NOW indicator — only relevant when viewing today
-  const nowMins = new Date().getHours() * 60 + new Date().getMinutes();
+  // NOW indicator — only relevant when viewing today (nowMins is reactive state, see FIX 4)
   const nowIndicatorBeforeId = isViewingToday ? (() => {
     for (const b of blocks) {
       const [h, m] = b.start_time.split(":").map(Number);
@@ -350,13 +382,13 @@ export default function TodayPage() {
             )}
             <button
               onClick={() => navigate(-1)}
-              className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-[16px]"
+              className="w-11 h-11 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-[16px]"
             >
               ←
             </button>
             <button
               onClick={() => navigate(1)}
-              className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-[16px]"
+              className="w-11 h-11 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-[16px]"
             >
               →
             </button>
@@ -508,7 +540,7 @@ export default function TodayPage() {
                       const showNow = block.id === nowIndicatorBeforeId;
                       return (
                         <Fragment key={block.id}>
-                          {showNow && <NowLine />}
+                          {showNow && <div ref={nowLineRef}><NowLine /></div>}
                           {!showNow && gap > 15 && (
                             <div className="flex items-center gap-2 py-0.5">
                               <div className="flex-1 h-px bg-zinc-100" />

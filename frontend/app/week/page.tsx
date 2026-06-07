@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import DayColumn from "@/components/DayColumn";
 import BlockCard from "@/components/BlockCard";
 import {
@@ -72,7 +72,14 @@ export default function WeekPage() {
     return false;
   });
 
-  const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()));
+  // FIX 15: read ?date= param to allow navigating here from analytics history
+  const [weekStart, setWeekStart] = useState<Date>(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search).get("date");
+      if (p && /^\d{4}-\d{2}-\d{2}$/.test(p)) return getMonday(new Date(p + "T00:00:00"));
+    }
+    return getMonday(new Date());
+  });
   const [blocks, setBlocks] = useState<ScheduleBlock[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +88,15 @@ export default function WeekPage() {
   const [archiveBlocks, setArchiveBlocks] = useState<ScheduleBlock[]>([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+
+  // FIX 9: mobile day scroll refs and active index
+  const mobileScrollRef = useRef<HTMLDivElement>(null);
+  const dayColRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [activeDayIdx, setActiveDayIdx] = useState<number>(() => {
+    const today = new Date();
+    const mon = getMonday(today);
+    return Math.max(0, Math.min(6, Math.round((today.getTime() - mon.getTime()) / 86400000)));
+  });
 
   // Day drawer
   const [drawerDate, setDrawerDate] = useState<string | null>(null);
@@ -95,6 +111,22 @@ export default function WeekPage() {
     const id = Date.now();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  }
+
+  function handleMobileScroll(e: React.UIEvent<HTMLDivElement>) {
+    const container = e.currentTarget;
+    const colWidth = container.scrollWidth / 7;
+    if (colWidth > 0) {
+      setActiveDayIdx(Math.max(0, Math.min(6, Math.round(container.scrollLeft / colWidth))));
+    }
+  }
+
+  function scrollToDay(idx: number) {
+    const col = dayColRefs.current[idx];
+    if (col && mobileScrollRef.current) {
+      mobileScrollRef.current.scrollTo({ left: col.offsetLeft, behavior: "smooth" });
+    }
+    setActiveDayIdx(idx);
   }
 
   const todayStr = toLocalDateString(new Date());
@@ -236,9 +268,16 @@ export default function WeekPage() {
             )}
           </div>
         </div>
-        {!viewingNext && (
-          <div className="flex items-center gap-1 bg-zinc-50 border border-zinc-200 rounded-xl p-1 self-start sm:self-auto">
-            {[[-1, "← Prev"], [0, "Today"], [1, "Next →"]].map(([offset, label]) => (
+        <div className="flex items-center gap-1 bg-zinc-50 border border-zinc-200 rounded-xl p-1 self-start sm:self-auto">
+          {viewingNext ? (
+            <button
+              onClick={() => setViewingNext(false)}
+              className="text-[13px] font-medium text-zinc-500 hover:text-zinc-900 hover:bg-white px-3 py-1.5 rounded-lg transition-all"
+            >
+              ← This Week
+            </button>
+          ) : (
+            [[-1, "← Prev"], [0, "Today"], [1, "Next →"]].map(([offset, label]) => (
               <button
                 key={String(label)}
                 onClick={() => offset === 0 ? setWeekStart(getMonday(new Date())) : setWeekStart(p => addWeeks(p, offset as number))}
@@ -246,9 +285,9 @@ export default function WeekPage() {
               >
                 {label}
               </button>
-            ))}
-          </div>
-        )}
+            ))
+          )}
+        </div>
       </div>
 
       {/* This week / Next week toggle */}
@@ -341,13 +380,45 @@ export default function WeekPage() {
 
       {/* 7-column grid */}
       {!loading && !error && (
-        <div className="overflow-x-auto">
-          <div className="border border-zinc-200 rounded-2xl overflow-hidden min-w-[700px] shadow-sm">
-            <div className="grid grid-cols-7">
+        <>
+          {/* Mobile: day tab bar + horizontal snap scroll (FIX 9) */}
+          <div className="sm:hidden">
+            <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+              {days.map((d, i) => {
+                const dateStr = toLocalDateString(d);
+                const isToday = dateStr === todayStr;
+                return (
+                  <button
+                    key={i}
+                    onClick={() => scrollToDay(i)}
+                    className={`shrink-0 flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-colors ${
+                      activeDayIdx === i
+                        ? "bg-indigo-600 text-white"
+                        : isToday
+                        ? "bg-indigo-50 text-indigo-600 border border-indigo-200"
+                        : "bg-zinc-100 text-zinc-500"
+                    }`}
+                  >
+                    <span className="text-[9px] font-bold uppercase tracking-widest">{DAY_LABELS[i]}</span>
+                    <span className="text-[14px] font-semibold leading-none">{d.getDate()}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div
+              ref={mobileScrollRef}
+              className="flex overflow-x-auto snap-x snap-mandatory gap-3 pb-3"
+              style={{ scrollbarWidth: "none" }}
+              onScroll={handleMobileScroll}
+            >
               {days.map((d, i) => {
                 const dateStr = toLocalDateString(d);
                 return (
-                  <div key={dateStr} className="border-r border-zinc-200 last:border-r-0">
+                  <div
+                    key={dateStr}
+                    ref={el => { dayColRefs.current[i] = el; }}
+                    className="snap-start shrink-0 w-[85vw] border border-zinc-200 rounded-xl overflow-hidden"
+                  >
                     <DayColumn
                       day={`${DAY_LABELS[i]} ${d.getDate()}`}
                       date={dateStr}
@@ -360,7 +431,29 @@ export default function WeekPage() {
               })}
             </div>
           </div>
-        </div>
+
+          {/* Desktop: 7-column grid */}
+          <div className="hidden sm:block overflow-x-auto">
+            <div className="border border-zinc-200 rounded-2xl overflow-hidden min-w-[700px] shadow-sm">
+              <div className="grid grid-cols-7">
+                {days.map((d, i) => {
+                  const dateStr = toLocalDateString(d);
+                  return (
+                    <div key={dateStr} className="border-r border-zinc-200 last:border-r-0">
+                      <DayColumn
+                        day={`${DAY_LABELS[i]} ${d.getDate()}`}
+                        date={dateStr}
+                        blocks={blocksByDay[dateStr] ?? []}
+                        isToday={dateStr === todayStr}
+                        onClick={() => openDrawer(dateStr)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Day drawer */}
@@ -370,7 +463,7 @@ export default function WeekPage() {
             className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px]"
             onClick={() => setDrawerDate(null)}
           />
-          <div className="fixed right-0 top-0 bottom-0 z-40 w-[380px] bg-white border-l border-zinc-200 shadow-xl flex flex-col">
+          <div className="fixed right-0 top-0 bottom-0 z-40 w-full sm:w-[380px] bg-white border-l border-zinc-200 shadow-xl flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 shrink-0">
               <div>
                 <p className="text-[15px] font-semibold text-zinc-900">{fmtDayFull(drawerDate)}</p>
@@ -378,7 +471,7 @@ export default function WeekPage() {
               </div>
               <button
                 onClick={() => setDrawerDate(null)}
-                className="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-xl"
+                className="w-11 h-11 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors text-xl"
               >
                 ×
               </button>
@@ -453,7 +546,7 @@ export default function WeekPage() {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <div className="border border-zinc-200 rounded-2xl overflow-hidden min-w-[700px] opacity-60 pointer-events-none select-none">
+                  <div className="border border-zinc-200 rounded-2xl overflow-hidden min-w-[700px] opacity-80 shadow-sm">
                     <div className="grid grid-cols-7">
                       {Array.from({ length: 7 }, (_, i) => {
                         const ws = new Date(viewingArchive.week_start_date + "T00:00:00");
