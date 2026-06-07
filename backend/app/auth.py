@@ -14,7 +14,7 @@ from app.database import SessionLocal
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-please-change-in-production")
 ALGORITHM = "HS256"
-TOKEN_EXPIRE_DAYS = 30
+TOKEN_EXPIRE_DAYS = 90
 
 security = HTTPBearer()
 

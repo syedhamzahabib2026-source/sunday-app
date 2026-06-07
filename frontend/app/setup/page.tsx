@@ -37,6 +37,7 @@ type EnergyPref  = "front_load" | "spread_out";
 type Mode        = "ai" | "manual";
 type TimingPref  = "ai_decide" | "morning" | "afternoon" | "evening";
 type MealTiming  = "Early" | "Normal" | "Late";
+type AIExercise  = "none" | "sometimes" | "daily";
 
 interface FixedCommitment {
   id: string; name: string; time: string; duration: number; days: string[];
@@ -54,6 +55,7 @@ interface WizardTask {
   fixed_end_time?: string;     // "HH:MM" 24h
   commute_minutes: number;     // one-way, 0 = no travel
   is_recurring?: boolean;
+  deadline?: string;           // "YYYY-MM-DD"
 }
 
 interface WizardData {
@@ -93,6 +95,8 @@ interface WizardData {
   // Deep work preferences
   deep_work_enabled: boolean;
   deep_work_session_duration: number;
+  // AI mode exercise
+  ai_exercise: AIExercise;
 }
 
 interface DraftState {
@@ -182,10 +186,10 @@ const DEFAULTS: WizardData = {
   meal_prep_days: [],
   gym_days_per_week: 3,
   gym_duration_mins: 75,
-  muay_thai_days_per_week: 2,
+  muay_thai_days_per_week: 0,
   muay_thai_duration_mins: 90,
   workout_time_preference: "morning",
-  is_remote: false,
+  is_remote: true,
   work_location_name: "",
   commute_minutes: 30,
   work_days_per_week: 5,
@@ -203,6 +207,7 @@ const DEFAULTS: WizardData = {
   dinner_timing:    "Normal",
   deep_work_enabled: false,
   deep_work_session_duration: 120,
+  ai_exercise: "none",
 };
 
 // ─── Last-week helpers ────────────────────────────────────────────────────────
@@ -577,7 +582,7 @@ function ModeScreen({ onSelect, weekTarget, setWeekTarget, lastWeekPrefs, lastWe
             mode: "ai" as Mode,
             emoji: "🤖",
             label: "AI Mode",
-            desc: "Sunday decides your sleep time, wake time, meals and workouts. Just follow the schedule.",
+            desc: "Add your tasks and let Sunday build the week. Sleep, meals, and routines are all handled automatically.",
           },
           {
             mode: "manual" as Mode,
@@ -744,8 +749,8 @@ function Step3({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
           )}
         </div>
         <div>
-          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Muay Thai days per week</p>
-          <p className="text-[14px] text-gray-400 mb-3">Set to 0 if you don&apos;t train.</p>
+          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Other exercise per week</p>
+          <p className="text-[14px] text-gray-400 mb-3">Yoga, swimming, martial arts, etc. Set to 0 if none.</p>
           <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.muay_thai_days_per_week} onChange={v => set("muay_thai_days_per_week", v)} />
           {data.muay_thai_days_per_week > 0 && (
             <div className="mt-4 bg-white rounded-2xl border border-gray-100">
@@ -991,6 +996,7 @@ function DraftTaskForm({ onAdd, onUpdate, onCancel, mode, initialTask, savedLoca
   const [hasCommute,   setHasCommute]  = useState((initialTask?.commute_minutes ?? 0) > 0);
   const [commuteMins,  setCommuteMins] = useState(initialTask?.commute_minutes && initialTask.commute_minutes > 0 ? initialTask.commute_minutes : 30);
   const [locationName, setLocationName] = useState("");
+  const [deadline,     setDeadline]    = useState(initialTask?.deadline ?? "");
 
   const togglePrefDay = (full: string) =>
     setPrefDays(d => d.includes(full) ? d.filter(x => x !== full) : [...d, full]);
@@ -1029,6 +1035,7 @@ function DraftTaskForm({ onAdd, onUpdate, onCancel, mode, initialTask, savedLoca
         fixed_end_time: fixedEnd,
         commute_minutes: hasCommute ? commuteMins : 0,
         is_recurring: initialTask?.is_recurring ?? false,
+        deadline: deadline || undefined,
       };
     } else {
       const timingPref: TimingPref =
@@ -1043,6 +1050,7 @@ function DraftTaskForm({ onAdd, onUpdate, onCancel, mode, initialTask, savedLoca
         is_flexible: true,
         commute_minutes: hasCommute ? commuteMins : 0,
         is_recurring: initialTask?.is_recurring ?? false,
+        deadline: deadline || undefined,
       };
     }
     if (isEditMode && onUpdate) {
@@ -1104,6 +1112,28 @@ function DraftTaskForm({ onAdd, onUpdate, onCancel, mode, initialTask, savedLoca
           ))}
         </div>
       </div>
+
+      {/* Deadline */}
+      {!isSleepWord && (
+        <div>
+          <p className="text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-2">
+            Deadline <span className="normal-case font-normal">(optional)</span>
+          </p>
+          <input
+            type="date"
+            value={deadline}
+            onChange={e => setDeadline(e.target.value)}
+            min={new Date().toISOString().slice(0, 10)}
+            className="px-3 py-2 rounded-xl border border-gray-200 text-[14px] text-gray-900 bg-white focus:outline-none focus:border-indigo-300 transition-colors"
+          />
+          {deadline && (
+            <button type="button" onClick={() => setDeadline("")}
+              className="ml-2 text-[12px] text-gray-400 hover:text-gray-600 transition-colors">
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Timing */}
       <div>
@@ -1325,29 +1355,36 @@ function SuggestionCard({ task, onAdd, onEdit, onDismiss }: {
 
 // ─── Meal timing row (reused in AI and Manual modes) ─────────────────────────
 
+const MEAL_TIMING_LABELS: Record<string, Record<MealTiming, string>> = {
+  Breakfast: { Early: "Early (6:30 AM)", Normal: "Normal (7:30 AM)", Late: "Late (9:00 AM)" },
+  Lunch:     { Early: "Early (11:30)",   Normal: "Normal (12:30)",   Late: "Late (2:00 PM)" },
+  Dinner:    { Early: "Early (5:30 PM)", Normal: "Normal (7:00 PM)", Late: "Late (8:30 PM)" },
+};
+
 function MealTimingRow({ meal, value, onChange }: {
   meal: string;
   value: MealTiming;
   onChange: (v: MealTiming) => void;
 }) {
+  const labels = MEAL_TIMING_LABELS[meal] ?? { Early: "Early", Normal: "Normal", Late: "Late" };
   return (
     <div>
       <p className="text-[14px] font-medium text-gray-700 mb-2">
         When do you usually eat {meal.toLowerCase()}?
       </p>
-      <div className="flex bg-gray-100 rounded-full p-1 gap-1 max-w-xs">
+      <div className="flex flex-col gap-2">
         {(["Early", "Normal", "Late"] as const).map(t => (
           <button
             key={t}
             type="button"
             onClick={() => onChange(t)}
-            className={`flex-1 py-1.5 rounded-full text-[13px] font-semibold transition-all ${
+            className={`w-full px-4 py-2.5 rounded-xl text-[14px] font-medium text-left border transition-all ${
               value === t
-                ? "bg-white text-indigo-600 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
+                ? "bg-indigo-600 text-white border-indigo-600"
+                : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
             }`}
           >
-            {t}
+            {labels[t]}
           </button>
         ))}
       </div>
@@ -1419,6 +1456,31 @@ function AIQuickPrefs({ data, set }: {
           onChange={v => set("dinner_timing", v)} />
       )}
 
+      {/* Exercise */}
+      <div>
+        <p className="text-[14px] font-medium text-gray-700 mb-2">Do you exercise regularly?</p>
+        <div className="flex gap-2 flex-wrap">
+          {([
+            { val: "none"      as AIExercise, label: "No" },
+            { val: "sometimes" as AIExercise, label: "A few times a week" },
+            { val: "daily"     as AIExercise, label: "Daily" },
+          ]).map(opt => (
+            <button
+              key={opt.val}
+              type="button"
+              onClick={() => set("ai_exercise", opt.val)}
+              className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
+                data.ai_exercise === opt.val
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Commute */}
       <div>
         <div className="flex items-center justify-between">
@@ -1469,7 +1531,7 @@ function TasksStep({ data, set, mode, suggestions, dismissedSuggestions, onDismi
 
   const addTask = (t: WizardTask) => {
     set("tasks", [...data.tasks, t]);
-    setShowForm(false);
+    setShowForm(true);
   };
 
   const removeTask = (id: string) => {
@@ -1549,16 +1611,22 @@ function TasksStep({ data, set, mode, suggestions, dismissedSuggestions, onDismi
                         : `${task.timing_preference}${task.preferred_days.length > 0 ? ` · ${task.preferred_days.map(d => d.slice(0,3)).join(", ")}` : ""}`
                     }
                   </span>
+                  {task.deadline && (
+                    <span className="text-[12px] text-orange-500">📅 Due {task.deadline}</span>
+                  )}
                 </div>
               </div>
               {/* Recurring toggle */}
               <button
                 type="button"
                 onClick={() => toggleRecurring(task.id)}
-                title={task.is_recurring ? "Recurring — click to disable" : "Click to make recurring"}
-                className={`text-sm leading-none transition-colors shrink-0 ${task.is_recurring ? "text-indigo-500" : "text-gray-300 hover:text-gray-500"}`}
+                className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all ${
+                  task.is_recurring
+                    ? "bg-indigo-50 text-indigo-600 border-indigo-200"
+                    : "bg-white text-gray-400 border-gray-200 hover:border-gray-400 hover:text-gray-600"
+                }`}
               >
-                ↻
+                {task.is_recurring ? "↻ Repeats weekly" : "Repeat?"}
               </button>
               {/* Edit button */}
               <button type="button" onClick={() => onEditTask?.(task)}
@@ -1645,7 +1713,7 @@ function ReviewStep({ data, set, mode, weekTarget }: {
   const summaryItems = [
     { label: "Sleep", value: `${data.sleep_target_hours}h / night` },
     { label: "Gym", value: `${data.gym_days_per_week}×/week` },
-    { label: "Muay Thai", value: `${data.muay_thai_days_per_week}×/week` },
+    { label: "Exercise", value: `${data.muay_thai_days_per_week}×/week` },
     { label: "Meals/day", value: String(data.meals_per_day) },
     { label: "Commute", value: data.is_remote ? "Remote" : `${data.commute_minutes}m × ${data.work_days_per_week}d` },
     { label: "Tasks added", value: String(data.tasks.length) },
@@ -1731,6 +1799,24 @@ function ReviewStep({ data, set, mode, weekTarget }: {
         <div className="flex justify-between mt-1.5">
           <span className="text-[12px] text-zinc-400">Light week</span>
           <span className="text-[12px] text-zinc-400">Full capacity</span>
+        </div>
+      </div>
+
+      <div className="mb-7">
+        <p className="text-[13px] font-semibold text-zinc-400 uppercase tracking-widest mb-3">Schedule style</p>
+        <div className="grid grid-cols-2 gap-3">
+          {([
+            { val: "front_load" as EnergyPref, label: "Front-load", desc: "Hard tasks Mon–Wed, easier later" },
+            { val: "spread_out" as EnergyPref, label: "Spread evenly", desc: "Tasks distributed across all days" },
+          ]).map(opt => (
+            <button key={opt.val} type="button" onClick={() => set("energy_preference", opt.val)}
+              className={`p-4 rounded-2xl border-2 text-left transition-all ${
+                data.energy_preference === opt.val ? "border-indigo-600 bg-indigo-50" : "border-zinc-200 bg-white hover:border-zinc-300"
+              }`}>
+              <div className={`text-[14px] font-semibold mb-1 ${data.energy_preference === opt.val ? "text-gray-900" : "text-gray-700"}`}>{opt.label}</div>
+              <div className="text-[12px] text-gray-500 leading-snug">{opt.desc}</div>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -1983,7 +2069,7 @@ export default function SetupPage() {
     setData(prev => ({ ...prev, ...prefill, tasks }));
     setPreFilledFromLastWeek(true);
     setMode("manual");
-    setStep(4);
+    setStep(5);
     setDirection(1);
   }
 
@@ -1991,7 +2077,6 @@ export default function SetupPage() {
     if (!lastWeekPrefs) return;
     const prefill = prefsToWizardData(lastWeekPrefs);
     const tasks: WizardTask[] = (lastWeekTasks ?? [])
-      .filter(t => t.is_recurring)
       .map((t, i) => apiTaskToWizardTask(t, i));
     const genData = { ...DEFAULTS, ...prefill, tasks };
     setData(genData);
@@ -2028,8 +2113,8 @@ export default function SetupPage() {
   }
 
   // Step routing
-  const TOTAL        = mode === "ai" ? 2 : 5;
-  const tasksStepNum = mode === "ai" ? 1 : 4;
+  const TOTAL        = mode === "ai" ? 2 : 6;
+  const tasksStepNum = mode === "ai" ? 1 : 5;
   const isLastStep   = step === TOTAL;
   const canContinue  = step !== tasksStepNum || data.tasks.length > 0;
 
@@ -2066,8 +2151,9 @@ export default function SetupPage() {
       if (step === 1) return <Step1 {...props} />;
       if (step === 2) return <Step2 {...props} />;
       if (step === 3) return <Step3 {...props} />;
-      if (step === 4) return <TasksStep {...tasksStepProps} />;
-      if (step === 5) return <ReviewStep data={data} set={set} mode={mode} weekTarget={weekTarget} />;
+      if (step === 4) return <Step4 {...props} />;
+      if (step === 5) return <TasksStep {...tasksStepProps} />;
+      if (step === 6) return <ReviewStep data={data} set={set} mode={mode} weekTarget={weekTarget} />;
     }
     if (mode === "ai") {
       if (step === 1) return <TasksStep {...tasksStepProps} />;
@@ -2102,9 +2188,11 @@ export default function SetupPage() {
       meals_per_day: genMode === "ai" ? genData.ai_meals_per_day : genData.meals_per_day,
       meal_duration_mins: genMode === "ai" ? genData.ai_meal_duration_mins : genData.meal_duration_mins,
       meal_prep_days: genData.meal_prep_days,
-      gym_days_per_week: genData.gym_days_per_week,
+      gym_days_per_week: genMode === "ai"
+        ? (genData.ai_exercise === "none" ? 0 : genData.ai_exercise === "sometimes" ? 3 : 5)
+        : genData.gym_days_per_week,
       gym_duration_mins: genData.gym_duration_mins,
-      muay_thai_days_per_week: genData.muay_thai_days_per_week,
+      muay_thai_days_per_week: genMode === "ai" ? 0 : genData.muay_thai_days_per_week,
       muay_thai_duration_mins: genData.muay_thai_duration_mins,
       workout_time_preference: genData.workout_time_preference,
       commute_minutes: genMode === "ai"
@@ -2148,7 +2236,7 @@ export default function SetupPage() {
         await createTask({
           title: task.title,
           duration_minutes: task.duration_minutes,
-          deadline: null,
+          deadline: task.deadline ?? null,
           priority: task.priority,
           energy_level: "medium",
           is_flexible: task.is_flexible ?? true,
@@ -2269,6 +2357,15 @@ export default function SetupPage() {
               </button>
             )}
           </div>
+          {!canContinue && step === tasksStepNum && (
+            <div className="max-w-lg mx-auto mt-3 text-center">
+              <p className="text-[13px] text-gray-400 mb-1">Add at least one task to continue</p>
+              <button type="button" onClick={goNext}
+                className="text-[13px] text-indigo-500 hover:text-indigo-700 underline transition-colors">
+                Skip — generate without tasks
+              </button>
+            </div>
+          )}
 
           {errMsg && (
             <div className="max-w-lg mx-auto mt-3 px-4 py-2.5 rounded-xl bg-red-50 border border-red-100 text-[13px] text-red-600">

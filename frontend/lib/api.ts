@@ -234,7 +234,7 @@ export function getAllTasks(): Promise<Task[]> {
 export interface TaskCreatePayload {
   title: string;
   duration_minutes: number;
-  deadline: null;
+  deadline: string | null;
   priority: string;
   energy_level: string;
   is_flexible: boolean;

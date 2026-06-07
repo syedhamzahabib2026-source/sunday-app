@@ -19,7 +19,7 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   sleep:     { color: "#6366f1", label: "Sleep",     Icon: Moon      },
   meal:      { color: "#16a34a", label: "Meal",      Icon: Utensils  },
   gym:       { color: "#ea580c", label: "Gym",       Icon: Dumbbell  },
-  muay_thai: { color: "#dc2626", label: "Muay Thai", Icon: Flame     },
+  muay_thai: { color: "#dc2626", label: "Exercise",  Icon: Flame     },
   commute:   { color: "#7c3aed", label: "Commute",   Icon: Car       },
   routine:   { color: "#71717a", label: "Routine",   Icon: Sunrise   },
   buffer:    { color: "#71717a", label: "Buffer",    Icon: Sunrise   },
