@@ -9,7 +9,20 @@ from app.routers import locations, auth as auth_router
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Sunday API", version="2.0.0")
+# Railway sets RAILWAY_ENVIRONMENT automatically; fall back to ENV/ENVIRONMENT for other hosts
+_is_production = bool(
+    os.getenv("RAILWAY_ENVIRONMENT")
+    or os.getenv("ENV", os.getenv("ENVIRONMENT", "")).lower() == "production"
+)
+
+app = FastAPI(
+    title="Sunday API",
+    version="2.0.0",
+    redirect_slashes=False,
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
+    openapi_url=None if _is_production else "/openapi.json",
+)
 
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
