@@ -8,7 +8,7 @@ import logging
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -193,6 +193,64 @@ def _get_ai_scheduling_hints(
     return {t.title: "any" for t in tasks}
 
 
+# ── Fixed-commitment parser ───────────────────────────────────────────────────
+
+def _parse_fixed_commitments(raw: Optional[str]) -> List[Dict]:
+    """
+    Parse fixed_commitments from the DB TEXT column.
+    Handles two on-disk formats:
+      • Old (wizard pre-Batch1): JSON array of JSON-encoded strings (double-encoded)
+      • New: JSON array of dicts {title, start_time, end_time, days, date, recurring}
+    Returns a list of normalised dicts ready for the scheduler.
+    """
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except Exception:
+        return []
+
+    result: List[Dict] = []
+    for item in items:
+        if isinstance(item, str):
+            try:
+                obj = json.loads(item)
+            except Exception:
+                continue
+        elif isinstance(item, dict):
+            obj = item
+        else:
+            continue
+
+        title      = obj.get("title") or obj.get("name", "")
+        start_time = obj.get("start_time") or obj.get("time", "")
+        duration   = int(obj.get("duration") or 60)
+        end_time   = obj.get("end_time") or ""
+
+        if not end_time and start_time:
+            try:
+                h, m  = map(int, start_time.split(":"))
+                total = h * 60 + m + duration
+                end_time = f"{(total // 60) % 24:02d}:{total % 60:02d}"
+            except Exception:
+                pass
+
+        days      = [d for d in (obj.get("days") or []) if isinstance(d, str)]
+        date_str  = obj.get("date") or None
+        recurring = bool(obj.get("recurring", True))
+
+        if title and start_time and end_time:
+            result.append({
+                "title":      title,
+                "start_time": start_time,
+                "end_time":   end_time,
+                "days":       days,
+                "date":       date_str,
+                "recurring":  recurring,
+            })
+    return result
+
+
 # ── Main engine ───────────────────────────────────────────────────────────────
 
 def generate_weekly_schedule(
@@ -262,13 +320,20 @@ def generate_weekly_schedule(
     meal_lunch_time     = p("meal_lunch_time",     None)
     meal_dinner_time    = p("meal_dinner_time",    None)
 
-    # AI mode: override wake/bed time defaults and disable Muay Thai.
-    if p("mode", "manual") == "ai":
-        preferred_wake_time     = "07:00"
-        preferred_bedtime       = "23:00"
-        morning_routine_mins    = 30
-        night_routine_mins      = 20
-        muay_thai_days_per_week = 0
+    # Gym/MT session durations — read from prefs, fall back to module constants
+    gym_dur_mins = int(p("gym_duration_mins",         GYM_DURATION_MINS) or GYM_DURATION_MINS)
+    mt_dur_mins  = int(p("muay_thai_duration_mins",   MT_DURATION_MINS)  or MT_DURATION_MINS)
+
+    # Fixed commitments (classes, shifts, one-offs) from prefs
+    commitment_objects = _parse_fixed_commitments(p("fixed_commitments", None))
+
+    # Recurring tasks — reset consumed instances so they re-appear every week
+    db.query(Task).filter(
+        Task.user_id == user_id,
+        Task.is_recurring == True,
+        Task.status.in_(["complete", "cancelled", "missed", "expired"]),
+    ).update({"status": "pending"}, synchronize_session=False)
+    db.flush()
 
     tasks: List[Task] = (
         db.query(Task)
@@ -342,8 +407,8 @@ def generate_weekly_schedule(
     routine_slots       = slots_needed(morning_routine_mins)
     night_routine_slots = slots_needed(night_routine_mins)
     commute_slots       = slots_needed(commute_minutes)
-    gym_slots           = slots_needed(GYM_DURATION_MINS)
-    mt_slots            = slots_needed(MT_DURATION_MINS)
+    gym_slots           = slots_needed(gym_dur_mins)
+    mt_slots            = slots_needed(mt_dur_mins)
 
     night_routine_start = max(wake_slot + routine_slots, bed_slot - night_routine_slots)
 
@@ -361,6 +426,47 @@ def generate_weekly_schedule(
 
     # Snapshot before fixed-task pre-marking — used in step 3g to detect overlapping fixed tasks.
     time_map_baseline: List[List[bool]] = [row[:] for row in time_map]
+
+    # ── Pre-mark fixed commitment slots (classes, work shifts, one-offs) ─────
+    # Resolved once here and reused for block placement after per-day blocks.
+    _commitment_placements: List[Tuple[Dict, int, int, List[int]]] = []
+    for fc in commitment_objects:
+        try:
+            fc_s  = time_to_slot(fc["start_time"])
+            raw_e = fc["end_time"]
+            fc_e  = SLOTS_PER_DAY if raw_e == "00:00" else time_to_slot(raw_e)
+            fc_n  = max(1, fc_e - fc_s)
+        except Exception:
+            continue
+
+        fc_day_indices: List[int] = []
+        if fc.get("date"):
+            try:
+                fc_specific = date.fromisoformat(fc["date"])
+                off = (fc_specific - week_start_date).days
+                if 0 <= off <= 6:
+                    fc_day_indices = [off]
+            except Exception:
+                pass
+        for day_name in fc.get("days", []):
+            idx = DAY_NAME_TO_IDX.get(day_name)
+            if idx is not None and idx not in fc_day_indices:
+                fc_day_indices.append(idx)
+
+        if not fc_day_indices:
+            continue
+
+        for d_idx in fc_day_indices:
+            d_date = week_start_date + timedelta(days=d_idx)
+            if d_date < schedule_start_date:
+                continue
+            cutoff = schedule_start_slot if d_date == schedule_start_date else 0
+            if fc_s < cutoff:
+                continue
+            if fc_s >= wake_slot:
+                mark_occupied(time_map, d_idx, fc_s, fc_n)
+
+        _commitment_placements.append((fc, fc_s, fc_n, fc_day_indices))
 
     # ── Bug 1 fix: Pre-mark fixed task slots so meals/gym won't land there ────
     # This runs AFTER sleep is marked but BEFORE per-day blocks (meals, commute, gym).
@@ -489,6 +595,24 @@ def generate_weekly_schedule(
                 if _ok(ms):
                     blocks.append(_block(user_id, day_date, "meal", meal_name,
                                          ms, MEAL_DURATION_SLOTS))
+
+    # ── 3b.5: Fixed commitment blocks (LOCKED — placed before gym/tasks) ────────
+    for fc, fc_s, fc_n, fc_day_indices in _commitment_placements:
+        for d_idx in fc_day_indices:
+            d_date = week_start_date + timedelta(days=d_idx)
+            if d_date < schedule_start_date:
+                continue
+            cutoff = schedule_start_slot if d_date == schedule_start_date else 0
+            if fc_s < cutoff:
+                continue
+            # Skip if entirely outside waking hours
+            if fc_s < wake_slot or (fc_s + fc_n) > bed_slot:
+                continue
+            blocks.append(_block(
+                user_id, d_date, "commitment", fc["title"],
+                fc_s, fc_n, is_locked=True,
+            ))
+            logger.info(f"Placed commitment '{fc['title']}' on day {d_idx} slots {fc_s}-{fc_s+fc_n}")
 
     # ── 3e/3f: Gym and Muay Thai across the week ──────────────────────────────
     AFTERNOON_START = 26   # 13:00

@@ -51,6 +51,16 @@ export interface Task {
   updated_at: string;
 }
 
+export interface FixedCommitment {
+  id?: string;           // frontend-only key, ignored by scheduler
+  title: string;
+  start_time: string;    // "HH:MM" 24h
+  end_time: string;      // "HH:MM" 24h
+  days: string[];        // for recurring: ["Monday", "Wednesday", ...]
+  date?: string | null;  // for one-off: "YYYY-MM-DD"
+  recurring: boolean;
+}
+
 export interface WeeklyPreferences {
   id: number;
   user_id: number;
@@ -76,7 +86,7 @@ export interface WeeklyPreferences {
   work_location_name: string | null;
   weekly_task_capacity_hours: number;
   energy_preference: string;
-  fixed_commitments: string[];
+  fixed_commitments: FixedCommitment[];
   notes: string | null;
   mode: string;
   extra_context: string | null;

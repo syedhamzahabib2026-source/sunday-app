@@ -1,7 +1,13 @@
 import json
 from datetime import datetime, date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, field_validator
+
+# Each fixed commitment is stored as a dict. Both old wire format
+# ({"name":..,"time":..,"duration":..,"days":..}) and new format
+# ({"title":..,"start_time":..,"end_time":..,"days":..,"date":..,"recurring":..})
+# are accepted on write and normalised on read.
+FixedCommitmentDict = Dict[str, Any]
 
 
 class WeeklyPreferencesCreate(BaseModel):
@@ -27,14 +33,14 @@ class WeeklyPreferencesCreate(BaseModel):
     energy_preference: str = "front_load"
     shower_preference: str = "morning"
     meal_duration_mins: int = 20
-    fixed_commitments: List[str] = []
+    fixed_commitments: List[FixedCommitmentDict] = []
     notes: Optional[str] = None
     mode: str = "manual"
     extra_context: Optional[str] = None
-    scheduling_notes: Optional[str] = None   # plain-language scheduling preferences for the AI
-    meal_breakfast_time: Optional[str] = None  # "HH:MM" preferred breakfast time
-    meal_lunch_time:     Optional[str] = None  # "HH:MM" preferred lunch time
-    meal_dinner_time:    Optional[str] = None  # "HH:MM" preferred dinner time
+    scheduling_notes: Optional[str] = None
+    meal_breakfast_time: Optional[str] = None
+    meal_lunch_time:     Optional[str] = None
+    meal_dinner_time:    Optional[str] = None
     deep_work_enabled: bool = False
     deep_work_session_duration: int = 120
 
@@ -61,7 +67,7 @@ class WeeklyPreferencesUpdate(BaseModel):
     work_location_name: Optional[str] = None
     weekly_task_capacity_hours: Optional[float] = None
     energy_preference: Optional[str] = None
-    fixed_commitments: Optional[List[str]] = None
+    fixed_commitments: Optional[List[FixedCommitmentDict]] = None
     notes: Optional[str] = None
     mode: Optional[str] = None
     extra_context: Optional[str] = None
@@ -98,7 +104,7 @@ class WeeklyPreferencesResponse(BaseModel):
     work_location_name: Optional[str]
     weekly_task_capacity_hours: float
     energy_preference: str
-    fixed_commitments: List[str]
+    fixed_commitments: List[FixedCommitmentDict]
     notes: Optional[str]
     mode: str
     extra_context: Optional[str]
@@ -110,11 +116,35 @@ class WeeklyPreferencesResponse(BaseModel):
     deep_work_session_duration: int
     created_at: datetime
 
-    @field_validator("meal_prep_days", "fixed_commitments", mode="before")
+    @field_validator("meal_prep_days", mode="before")
     @classmethod
-    def parse_json_list(cls, v):
+    def parse_meal_prep_days(cls, v):
         if isinstance(v, str):
             return json.loads(v)
         return v if v is not None else []
+
+    @field_validator("fixed_commitments", mode="before")
+    @classmethod
+    def parse_fixed_commitments(cls, v):
+        """Accept both old (array of JSON strings) and new (array of dicts) formats."""
+        if isinstance(v, str):
+            try:
+                items = json.loads(v)
+            except Exception:
+                return []
+        elif v is not None:
+            items = v
+        else:
+            return []
+        result = []
+        for item in items:
+            if isinstance(item, str):
+                try:
+                    result.append(json.loads(item))
+                except Exception:
+                    pass
+            elif isinstance(item, dict):
+                result.append(item)
+        return result
 
     model_config = {"from_attributes": True}

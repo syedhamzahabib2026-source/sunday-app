@@ -40,7 +40,13 @@ type MealTiming  = "Early" | "Normal" | "Late";
 type AIExercise  = "none" | "sometimes" | "daily";
 
 interface FixedCommitment {
-  id: string; name: string; time: string; duration: number; days: string[];
+  id: string;
+  title: string;
+  start_time: string;   // "HH:MM" 24h
+  end_time: string;     // "HH:MM" 24h
+  days: string[];       // for recurring entries
+  date?: string;        // for one-off: "YYYY-MM-DD"
+  recurring: boolean;
 }
 
 interface WizardTask {
@@ -213,6 +219,13 @@ const DEFAULTS: WizardData = {
 // ─── Last-week helpers ────────────────────────────────────────────────────────
 
 function prefsToWizardData(prefs: WeeklyPreferences): Partial<WizardData> {
+  // Restore fixed_commitments — filter to valid new-format entries only
+  const restoredCommitments: FixedCommitment[] = (prefs.fixed_commitments ?? [])
+    .filter((c): c is FixedCommitment =>
+      typeof c === "object" && c !== null && Boolean(c.title) && Boolean(c.start_time) && Boolean(c.end_time)
+    )
+    .map(c => ({ ...c, id: c.id ?? `restored-${Date.now()}-${Math.random()}` }));
+
   return {
     preferred_bedtime:        prefs.preferred_bedtime,
     preferred_wake_time:      prefs.preferred_wake_time,
@@ -238,6 +251,7 @@ function prefsToWizardData(prefs: WeeklyPreferences): Partial<WizardData> {
     extra_context:            prefs.extra_context ?? "",
     deep_work_enabled:        prefs.deep_work_enabled,
     deep_work_session_duration: prefs.deep_work_session_duration,
+    fixed_commitments:        restoredCommitments,
   };
 }
 
@@ -825,54 +839,94 @@ function Step4({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
 // ─── Step 5 — Capacity ────────────────────────────────────────────────────────
 
 function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
-  const [name, setName]    = useState("");
-  const [time, setTime]    = useState("09:00");
-  const [dur,  setDur]     = useState(30);
-  const [days, setDays]    = useState<string[]>([]);
+  const [title,     setTitle]     = useState("");
+  const [startTime, setStartTime] = useState("09:00");
+  const [endTime,   setEndTime]   = useState("10:00");
+  const [days,      setDays]      = useState<string[]>([]);
+  const [recurring, setRecurring] = useState(true);
+  const [dateStr,   setDateStr]   = useState("");
 
-  const canAdd = name.trim() && days.length > 0;
+  const durationMins = (() => {
+    const [sh, sm] = startTime.split(":").map(Number);
+    const [eh, em] = endTime.split(":").map(Number);
+    const diff = (eh * 60 + em) - (sh * 60 + sm);
+    return diff > 0 ? diff : diff + 1440;
+  })();
+
+  const canAdd = title.trim() && (recurring ? days.length > 0 : Boolean(dateStr)) && durationMins > 0;
   const toggleDay = (full: string) => setDays(d => d.includes(full) ? d.filter(x => x !== full) : [...d, full]);
+
   const handleAdd = () => {
     if (!canAdd) return;
-    onAdd({ id: `${Date.now()}`, name: name.trim(), time, duration: dur, days });
-    setName(""); setTime("09:00"); setDur(30); setDays([]);
+    onAdd({
+      id: `${Date.now()}-${Math.random()}`,
+      title: title.trim(),
+      start_time: startTime,
+      end_time: endTime,
+      days: recurring ? days : [],
+      date: recurring ? undefined : dateStr,
+      recurring,
+    });
+    setTitle(""); setStartTime("09:00"); setEndTime("10:00"); setDays([]); setDateStr("");
   };
 
   return (
     <div className="bg-gray-50 rounded-2xl p-5 space-y-4 border border-gray-100">
-      <input type="text" placeholder="Commitment name (e.g. Team standup)" value={name} onChange={e => setName(e.target.value)}
+      <input type="text" placeholder="e.g. Class, Panera shift, Parents' house"
+        value={title} onChange={e => setTitle(e.target.value)}
         className="w-full px-4 py-3 rounded-xl border border-gray-200 text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 bg-white" />
-      <div className="flex gap-3">
-        <div className="flex-1">
-          <p className="text-[12px] text-gray-400 mb-1.5 uppercase tracking-wider font-semibold">Time</p>
-          <input type="time" value={time} onChange={e => setTime(e.target.value)}
+
+      {/* Recurring toggle */}
+      <div className="flex items-center justify-between bg-white rounded-xl border border-gray-100 px-4 py-3">
+        <span className="text-[14px] font-medium text-gray-700">Repeats weekly</span>
+        <Toggle checked={recurring} onChange={setRecurring} />
+      </div>
+
+      {/* Days (recurring) or date (one-off) */}
+      {recurring ? (
+        <div>
+          <p className="text-[12px] text-gray-400 mb-2 uppercase tracking-wider font-semibold">Which days</p>
+          <div className="flex flex-wrap gap-2">
+            {DAYS_SHORT.map((short, i) => {
+              const full = DAYS_FULL[i];
+              const active = days.includes(full);
+              return (
+                <button key={full} type="button" onClick={() => toggleDay(full)}
+                  className={`px-3 py-1.5 rounded-full text-[13px] font-medium border transition-all ${
+                    active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                  }`}>
+                  {short}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div>
+          <p className="text-[12px] text-gray-400 mb-1.5 uppercase tracking-wider font-semibold">Date</p>
+          <input type="date" value={dateStr} onChange={e => setDateStr(e.target.value)}
+            min={new Date().toISOString().slice(0, 10)}
             className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-[15px] text-gray-900 bg-white focus:outline-none focus:border-gray-400" />
         </div>
-        <div className="flex-1">
-          <p className="text-[12px] text-gray-400 mb-1.5 uppercase tracking-wider font-semibold">Duration</p>
-          <select value={dur} onChange={e => setDur(Number(e.target.value))}
-            className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-[15px] text-gray-900 bg-white focus:outline-none focus:border-gray-400">
-            {[15,30,45,60,90,120].map(m => <option key={m} value={m}>{m} min</option>)}
-          </select>
+      )}
+
+      {/* Start / End time */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-[12px] text-gray-400 mb-1.5 uppercase tracking-wider font-semibold">Start</p>
+          <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)}
+            className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-[15px] text-gray-900 bg-white focus:outline-none focus:border-gray-400" />
+        </div>
+        <div>
+          <p className="text-[12px] text-gray-400 mb-1.5 uppercase tracking-wider font-semibold">End</p>
+          <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)}
+            className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-[15px] text-gray-900 bg-white focus:outline-none focus:border-gray-400" />
         </div>
       </div>
-      <div>
-        <p className="text-[12px] text-gray-400 mb-2 uppercase tracking-wider font-semibold">Which days</p>
-        <div className="flex flex-wrap gap-2">
-          {DAYS_SHORT.map((short, i) => {
-            const full = DAYS_FULL[i];
-            const active = days.includes(full);
-            return (
-              <button key={full} type="button" onClick={() => toggleDay(full)}
-                className={`px-3 py-1.5 rounded-full text-[13px] font-medium border transition-all ${
-                  active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-                }`}>
-                {short}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      {durationMins > 0 && (
+        <p className="text-[12px] text-indigo-600 font-medium">{fmtDuration(durationMins)}</p>
+      )}
+
       <button type="button" onClick={handleAdd} disabled={!canAdd}
         className="w-full py-3 rounded-xl text-[14px] font-semibold bg-indigo-600 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors">
         Add commitment
@@ -934,9 +988,11 @@ function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
               {data.fixed_commitments.map(c => (
                 <div key={c.id} className="flex items-center justify-between bg-white rounded-xl border border-gray-100 px-4 py-3">
                   <div>
-                    <span className="text-[14px] font-medium text-gray-900">{c.name}</span>
+                    <span className="text-[14px] font-medium text-gray-900">{c.title}</span>
                     <span className="text-[13px] text-gray-400 ml-3">
-                      {fmt12(c.time)} · {c.duration} min · {c.days.map(d => d.slice(0,3)).join(", ")}
+                      {fmt12(c.start_time)}–{fmt12(c.end_time)}
+                      {c.recurring && c.days.length > 0 && ` · ${c.days.map(d => d.slice(0, 3)).join(", ")}`}
+                      {!c.recurring && c.date && ` · ${c.date}`}
                     </span>
                   </div>
                   <button type="button"
@@ -2198,9 +2254,7 @@ export default function SetupPage() {
     const weekStart = toLocalDateString(
       weekTarget === "next" ? getFollowingMonday() : getCurrentMonday()
     );
-    const serializedCommitments = genData.fixed_commitments.map(c =>
-      JSON.stringify({ name: c.name, time: c.time, duration: c.duration, days: c.days })
-    );
+    const serializedCommitments = genData.fixed_commitments;
     const effectiveMealsPerDay = genMode === "ai" ? genData.ai_meals_per_day : genData.meals_per_day;
 
     await savePreferences({
@@ -2219,7 +2273,7 @@ export default function SetupPage() {
         ? (genData.ai_exercise === "none" ? 0 : genData.ai_exercise === "sometimes" ? 3 : 5)
         : genData.gym_days_per_week,
       gym_duration_mins: genData.gym_duration_mins,
-      muay_thai_days_per_week: genMode === "ai" ? 0 : genData.muay_thai_days_per_week,
+      muay_thai_days_per_week: genData.muay_thai_days_per_week,
       muay_thai_duration_mins: genData.muay_thai_duration_mins,
       workout_time_preference: genData.workout_time_preference,
       commute_minutes: genMode === "ai"
