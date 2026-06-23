@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 # Each fixed commitment is stored as a dict. Both old wire format
 # ({"name":..,"time":..,"duration":..,"days":..}) and new format
@@ -36,6 +36,9 @@ class WeeklyPreferencesCreate(BaseModel):
     fixed_commitments: List[FixedCommitmentDict] = []
     notes: Optional[str] = None
     mode: str = "manual"
+    meal_types: Optional[List[str]] = None  # e.g. ["Breakfast", "Dinner"]
+    gym_commute_minutes: Optional[int] = None
+    muay_thai_commute_minutes: Optional[int] = None
     extra_context: Optional[str] = None
     scheduling_notes: Optional[str] = None
     meal_breakfast_time: Optional[str] = None
@@ -77,6 +80,9 @@ class WeeklyPreferencesUpdate(BaseModel):
     meal_dinner_time:    Optional[str] = None
     deep_work_enabled: Optional[bool] = None
     deep_work_session_duration: Optional[int] = None
+    meal_types: Optional[List[str]] = None
+    gym_commute_minutes: Optional[int] = None
+    muay_thai_commute_minutes: Optional[int] = None
 
 
 class WeeklyPreferencesResponse(BaseModel):
@@ -114,6 +120,9 @@ class WeeklyPreferencesResponse(BaseModel):
     meal_dinner_time:    Optional[str]
     deep_work_enabled: bool
     deep_work_session_duration: int
+    meal_types: Optional[List[str]] = None
+    gym_commute_minutes: Optional[int] = None
+    muay_thai_commute_minutes: Optional[int] = None
     created_at: datetime
 
     @field_validator("meal_prep_days", mode="before")
@@ -146,5 +155,16 @@ class WeeklyPreferencesResponse(BaseModel):
             elif isinstance(item, dict):
                 result.append(item)
         return result
+
+    @field_validator("meal_types", mode="before")
+    @classmethod
+    def parse_meal_types(cls, v):
+        if isinstance(v, str):
+            try:
+                result = json.loads(v)
+                return result if isinstance(result, list) else None
+            except Exception:
+                return None
+        return v  # already list or None
 
     model_config = {"from_attributes": True}

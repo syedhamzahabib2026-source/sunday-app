@@ -25,6 +25,8 @@ def create_preferences(
         data["user_id"]           = current_user.id
         data["meal_prep_days"]    = json.dumps(data["meal_prep_days"])
         data["fixed_commitments"] = json.dumps(data["fixed_commitments"])
+        if data.get("meal_types") is not None:
+            data["meal_types"] = json.dumps(data["meal_types"])
         prefs = WeeklyPreferences(**data)
         db.add(prefs)
         db.commit()
@@ -115,6 +117,8 @@ def update_preferences(
             updates["meal_prep_days"] = json.dumps(updates["meal_prep_days"])
         if "fixed_commitments" in updates:
             updates["fixed_commitments"] = json.dumps(updates["fixed_commitments"])
+        if "meal_types" in updates and updates["meal_types"] is not None:
+            updates["meal_types"] = json.dumps(updates["meal_types"])
 
         for field, value in updates.items():
             setattr(prefs, field, value)

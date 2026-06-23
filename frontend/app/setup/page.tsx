@@ -72,13 +72,16 @@ interface WizardData {
   night_routine_mins: number;
   shower_preference: ShowerPref;
   shower_mins: number;
-  meals_per_day: number;
+  selected_meals: string[];       // ["Breakfast","Lunch","Dinner","Snack"]
+  meals_per_day: number;          // derived = selected_meals.length
   meal_duration_mins: number;
   meal_prep_days: string[];
   gym_days_per_week: number;
   gym_duration_mins: number;
+  gym_commute_minutes: number;
   muay_thai_days_per_week: number;
   muay_thai_duration_mins: number;
+  muay_thai_commute_minutes: number;
   workout_time_preference: WorkoutTime;
   is_remote: boolean;
   work_location_name: string;
@@ -187,13 +190,16 @@ const DEFAULTS: WizardData = {
   night_routine_mins: 20,
   shower_preference: "morning",
   shower_mins: 15,
-  meals_per_day: 3,
+  selected_meals: ["Breakfast", "Dinner"],
+  meals_per_day: 2,
   meal_duration_mins: 20,
   meal_prep_days: [],
   gym_days_per_week: 3,
   gym_duration_mins: 75,
+  gym_commute_minutes: 15,
   muay_thai_days_per_week: 0,
   muay_thai_duration_mins: 90,
+  muay_thai_commute_minutes: 60,
   workout_time_preference: "morning",
   is_remote: true,
   work_location_name: "",
@@ -226,6 +232,15 @@ function prefsToWizardData(prefs: WeeklyPreferences): Partial<WizardData> {
     )
     .map(c => ({ ...c, id: c.id ?? `restored-${Date.now()}-${Math.random()}` }));
 
+  // Restore selected_meals from meal_types, fall back to deriving from meals_per_day
+  const restoredMeals: string[] =
+    prefs.meal_types && prefs.meal_types.length > 0
+      ? prefs.meal_types
+      : prefs.meals_per_day === 1 ? ["Breakfast"]
+      : prefs.meals_per_day === 3 ? ["Breakfast", "Lunch", "Dinner"]
+      : prefs.meals_per_day >= 4  ? ["Breakfast", "Lunch", "Dinner", "Snack"]
+      : ["Breakfast", "Dinner"];
+
   return {
     preferred_bedtime:        prefs.preferred_bedtime,
     preferred_wake_time:      prefs.preferred_wake_time,
@@ -234,13 +249,16 @@ function prefsToWizardData(prefs: WeeklyPreferences): Partial<WizardData> {
     night_routine_mins:       prefs.night_routine_mins,
     shower_preference:        prefs.shower_preference as ShowerPref,
     shower_mins:              prefs.shower_mins,
-    meals_per_day:            prefs.meals_per_day,
+    selected_meals:           restoredMeals,
+    meals_per_day:            restoredMeals.length,
     meal_duration_mins:       prefs.meal_duration_mins,
     meal_prep_days:           prefs.meal_prep_days,
     gym_days_per_week:        prefs.gym_days_per_week,
     gym_duration_mins:        prefs.gym_duration_mins,
+    gym_commute_minutes:      prefs.gym_commute_minutes ?? 15,
     muay_thai_days_per_week:  prefs.muay_thai_days_per_week,
     muay_thai_duration_mins:  prefs.muay_thai_duration_mins,
+    muay_thai_commute_minutes: prefs.muay_thai_commute_minutes ?? 60,
     workout_time_preference:  prefs.workout_time_preference as WorkoutTime,
     is_remote:                prefs.is_remote,
     work_location_name:       prefs.work_location_name ?? "",
@@ -702,20 +720,44 @@ function Step2({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
         ]} value={data.shower_preference} onChange={v => set("shower_preference", v as ShowerPref)} />
       </div>
       <div className="mb-8">
-        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Meals per day</p>
-        <NumberChips options={[1,2,3,4]} value={data.meals_per_day} onChange={v => set("meals_per_day", v)} />
+        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Which meals do you eat?</p>
+        <div className="flex flex-wrap gap-2 mb-2">
+          {(["Breakfast", "Lunch", "Dinner", "Snack"] as const).map(meal => {
+            const active = data.selected_meals.includes(meal);
+            return (
+              <button key={meal} type="button"
+                onClick={() => {
+                  const next = active
+                    ? data.selected_meals.filter(m => m !== meal)
+                    : [...data.selected_meals, meal];
+                  set("selected_meals", next);
+                  set("meals_per_day", next.length);
+                }}
+                className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
+                  active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                }`}>
+                {meal}
+              </button>
+            );
+          })}
+        </div>
+        {data.selected_meals.length === 0 && (
+          <p className="text-[13px] text-amber-600 mt-1">Pick at least one meal.</p>
+        )}
       </div>
       <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100 mb-8">
         <Stepper label="Average meal duration" value={data.meal_duration_mins} onChange={v => set("meal_duration_mins", v)} min={10} max={60} />
       </div>
       <div className="space-y-5 mb-8">
-        <MealTimingRow meal="Breakfast" value={data.breakfast_timing}
-          onChange={v => set("breakfast_timing", v)} />
-        {data.meals_per_day >= 3 && (
+        {data.selected_meals.includes("Breakfast") && (
+          <MealTimingRow meal="Breakfast" value={data.breakfast_timing}
+            onChange={v => set("breakfast_timing", v)} />
+        )}
+        {data.selected_meals.includes("Lunch") && (
           <MealTimingRow meal="Lunch" value={data.lunch_timing}
             onChange={v => set("lunch_timing", v)} />
         )}
-        {data.meals_per_day >= 2 && (
+        {data.selected_meals.includes("Dinner") && (
           <MealTimingRow meal="Dinner" value={data.dinner_timing}
             onChange={v => set("dinner_timing", v)} />
         )}
@@ -751,27 +793,43 @@ function Step2({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
 
 function Step3({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
   return (
-    <StepShell headline="How do you train?" subtext="Sunday schedules your workouts before filling in everything else.">
+    <StepShell headline="How do you train?" subtext="Sunday schedules workouts as protected blocks before anything else.">
       <div className="space-y-8">
+        {/* Gym */}
         <div>
-          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Gym days per week</p>
+          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Gym sessions this week</p>
           <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.gym_days_per_week} onChange={v => set("gym_days_per_week", v)} />
           {data.gym_days_per_week > 0 && (
             <div className="mt-4 bg-white rounded-2xl border border-gray-100">
               <Stepper label="Session duration" value={data.gym_duration_mins} onChange={v => set("gym_duration_mins", v)} min={30} max={180} step={15} />
+              <Stepper label="Commute each way" value={data.gym_commute_minutes} onChange={v => set("gym_commute_minutes", v)} min={0} max={120} step={5} />
             </div>
           )}
+          {data.gym_days_per_week > 0 && data.gym_commute_minutes > 0 && (
+            <p className="text-[12px] text-gray-400 mt-2">
+              Total block per session: {fmtDuration(data.gym_commute_minutes + data.gym_duration_mins + data.gym_commute_minutes)} (travel + workout + return)
+            </p>
+          )}
         </div>
+
+        {/* Muay Thai */}
         <div>
-          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Other exercise per week</p>
-          <p className="text-[14px] text-gray-400 mb-3">Yoga, swimming, martial arts, etc. Set to 0 if none.</p>
+          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Muay Thai sessions this week</p>
+          <p className="text-[14px] text-gray-400 mb-3">Set to 0 if you&apos;re not going this week.</p>
           <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.muay_thai_days_per_week} onChange={v => set("muay_thai_days_per_week", v)} />
           {data.muay_thai_days_per_week > 0 && (
             <div className="mt-4 bg-white rounded-2xl border border-gray-100">
               <Stepper label="Session duration" value={data.muay_thai_duration_mins} onChange={v => set("muay_thai_duration_mins", v)} min={45} max={180} step={15} />
+              <Stepper label="Commute each way" value={data.muay_thai_commute_minutes} onChange={v => set("muay_thai_commute_minutes", v)} min={0} max={120} step={5} />
             </div>
           )}
+          {data.muay_thai_days_per_week > 0 && data.muay_thai_commute_minutes > 0 && (
+            <p className="text-[12px] text-gray-400 mt-2">
+              Total block per session: {fmtDuration(data.muay_thai_commute_minutes + data.muay_thai_duration_mins + data.muay_thai_commute_minutes)} (travel + training + return)
+            </p>
+          )}
         </div>
+
         {(data.gym_days_per_week > 0 || data.muay_thai_days_per_week > 0) && (
           <div>
             <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Preferred workout time</p>
@@ -1778,7 +1836,7 @@ function ReviewStep({ data, set, mode, weekTarget }: {
 }) {
   const sleepHoursPerWeek = data.sleep_target_hours * 7;
   const routineMinsPerWeek = (data.morning_routine_mins + data.night_routine_mins + data.shower_mins) * 7;
-  const mealMinsPerWeek = data.meals_per_day * data.meal_duration_mins * 7;
+  const mealMinsPerWeek = data.selected_meals.length * data.meal_duration_mins * 7;
   const gymMinsPerWeek = data.gym_days_per_week * data.gym_duration_mins;
   const muayThaiMinsPerWeek = data.muay_thai_days_per_week * data.muay_thai_duration_mins;
   const commuteMinsPerWeek = data.is_remote ? 0 : data.work_days_per_week * data.commute_minutes * 2;
@@ -1788,8 +1846,8 @@ function ReviewStep({ data, set, mode, weekTarget }: {
   const summaryItems = [
     { label: "Sleep", value: `${data.sleep_target_hours}h / night` },
     { label: "Gym", value: `${data.gym_days_per_week}×/week` },
-    { label: "Exercise", value: `${data.muay_thai_days_per_week}×/week` },
-    { label: "Meals/day", value: String(data.meals_per_day) },
+    { label: "Muay Thai", value: `${data.muay_thai_days_per_week}×/week` },
+    { label: "Meals", value: data.selected_meals.join(", ") || "None" },
     { label: "Commute", value: data.is_remote ? "Remote" : `${data.commute_minutes}m × ${data.work_days_per_week}d` },
     { label: "Tasks added", value: String(data.tasks.length) },
   ];
@@ -2255,7 +2313,8 @@ export default function SetupPage() {
       weekTarget === "next" ? getFollowingMonday() : getCurrentMonday()
     );
     const serializedCommitments = genData.fixed_commitments;
-    const effectiveMealsPerDay = genMode === "ai" ? genData.ai_meals_per_day : genData.meals_per_day;
+    const effectiveSelectedMeals = genMode === "ai" ? null : genData.selected_meals;
+    const effectiveMealsPerDay = genMode === "ai" ? genData.ai_meals_per_day : genData.selected_meals.length;
 
     await savePreferences({
       week_start_date: weekStart,
@@ -2266,15 +2325,18 @@ export default function SetupPage() {
       night_routine_mins: genData.night_routine_mins,
       shower_mins: genData.shower_mins,
       shower_preference: genData.shower_preference,
-      meals_per_day: genMode === "ai" ? genData.ai_meals_per_day : genData.meals_per_day,
+      meals_per_day: effectiveMealsPerDay,
       meal_duration_mins: genMode === "ai" ? genData.ai_meal_duration_mins : genData.meal_duration_mins,
       meal_prep_days: genData.meal_prep_days,
+      meal_types: effectiveSelectedMeals,
       gym_days_per_week: genMode === "ai"
         ? (genData.ai_exercise === "none" ? 0 : genData.ai_exercise === "sometimes" ? 3 : 5)
         : genData.gym_days_per_week,
       gym_duration_mins: genData.gym_duration_mins,
+      gym_commute_minutes: genData.gym_commute_minutes,
       muay_thai_days_per_week: genData.muay_thai_days_per_week,
       muay_thai_duration_mins: genData.muay_thai_duration_mins,
+      muay_thai_commute_minutes: genData.muay_thai_commute_minutes,
       workout_time_preference: genData.workout_time_preference,
       commute_minutes: genMode === "ai"
         ? (genData.ai_has_commute ? genData.ai_commute_mins : 0)
@@ -2289,9 +2351,12 @@ export default function SetupPage() {
       mode: genMode,
       extra_context: genData.extra_context || null,
       scheduling_notes: genData.extra_context || null,
-      meal_breakfast_time: BREAKFAST_TIMES[genData.breakfast_timing],
-      meal_lunch_time:     effectiveMealsPerDay >= 3 ? LUNCH_TIMES[genData.lunch_timing]  : null,
-      meal_dinner_time:    effectiveMealsPerDay >= 2 ? DINNER_TIMES[genData.dinner_timing] : null,
+      meal_breakfast_time: (genMode === "ai" || genData.selected_meals.includes("Breakfast"))
+        ? BREAKFAST_TIMES[genData.breakfast_timing] : null,
+      meal_lunch_time: (genMode === "ai" ? effectiveMealsPerDay >= 3 : genData.selected_meals.includes("Lunch"))
+        ? LUNCH_TIMES[genData.lunch_timing] : null,
+      meal_dinner_time: (genMode === "ai" ? effectiveMealsPerDay >= 2 : genData.selected_meals.includes("Dinner"))
+        ? DINNER_TIMES[genData.dinner_timing] : null,
       deep_work_enabled: genData.deep_work_enabled,
       deep_work_session_duration: genData.deep_work_session_duration,
     });
@@ -2395,7 +2460,7 @@ export default function SetupPage() {
       )}
 
       {/* Content */}
-      <div className="min-h-screen flex flex-col items-center justify-center px-6 pt-24 pb-32">
+      <div className="min-h-screen flex flex-col items-center px-6 pt-24 pb-32">
         {done ? (
           <DoneScreen weekTarget={weekTarget} />
         ) : draft !== null && draftChecked ? (

@@ -87,6 +87,9 @@ export interface WeeklyPreferences {
   weekly_task_capacity_hours: number;
   energy_preference: string;
   fixed_commitments: FixedCommitment[];
+  meal_types: string[] | null;
+  gym_commute_minutes: number | null;
+  muay_thai_commute_minutes: number | null;
   notes: string | null;
   mode: string;
   extra_context: string | null;

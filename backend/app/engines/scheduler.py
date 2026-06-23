@@ -324,6 +324,21 @@ def generate_weekly_schedule(
     gym_dur_mins = int(p("gym_duration_mins",         GYM_DURATION_MINS) or GYM_DURATION_MINS)
     mt_dur_mins  = int(p("muay_thai_duration_mins",   MT_DURATION_MINS)  or MT_DURATION_MINS)
 
+    # Per-activity commute (one-way minutes)
+    gym_commute_mins = int(p("gym_commute_minutes",        15) or 0)
+    mt_commute_mins  = int(p("muay_thai_commute_minutes",  60) or 0)
+
+    # Meal types — which meals the user actually eats this week
+    _meal_types_raw = p("meal_types", None)
+    if _meal_types_raw:
+        try:
+            _parsed = json.loads(_meal_types_raw)
+            selected_meal_types: Optional[List[str]] = _parsed if isinstance(_parsed, list) else None
+        except Exception:
+            selected_meal_types = None
+    else:
+        selected_meal_types = None
+
     # Fixed commitments (classes, shifts, one-offs) from prefs
     commitment_objects = _parse_fixed_commitments(p("fixed_commitments", None))
 
@@ -409,6 +424,10 @@ def generate_weekly_schedule(
     commute_slots       = slots_needed(commute_minutes)
     gym_slots           = slots_needed(gym_dur_mins)
     mt_slots            = slots_needed(mt_dur_mins)
+    gym_commute_slots   = slots_needed(gym_commute_mins) if gym_commute_mins else 0
+    mt_commute_slots    = slots_needed(mt_commute_mins)  if mt_commute_mins  else 0
+    gym_total_slots     = gym_commute_slots + gym_slots + gym_commute_slots
+    mt_total_slots      = mt_commute_slots  + mt_slots  + mt_commute_slots
 
     night_routine_start = max(wake_slot + routine_slots, bed_slot - night_routine_slots)
 
@@ -575,14 +594,25 @@ def generate_weekly_schedule(
         # Ensure breakfast target isn't before morning routine ends
         breakfast_slot = max(breakfast_slot, after_morning)
 
-        if meals_per_day == 1:
-            meal_plan = [("Breakfast", breakfast_slot)]
-        elif meals_per_day == 2:
+        # Resolve which meals to schedule from explicit selection or count fallback
+        _effective_types = selected_meal_types
+        if not _effective_types:
+            if meals_per_day == 1:
+                _effective_types = ["Breakfast"]
+            elif meals_per_day == 2:
+                _effective_types = ["Breakfast", "Dinner"]
+            else:
+                _effective_types = ["Breakfast", "Lunch", "Dinner"]
+
+        _meal_slot_map = {
+            "Breakfast": breakfast_slot,
+            "Lunch":     lunch_slot,
+            "Dinner":    dinner_slot,
+            "Snack":     time_to_slot("15:30"),
+        }
+        meal_plan = [(m, _meal_slot_map[m]) for m in _effective_types if m in _meal_slot_map]
+        if not meal_plan:
             meal_plan = [("Breakfast", breakfast_slot), ("Dinner", dinner_slot)]
-        else:
-            meal_plan = [("Breakfast", breakfast_slot),
-                         ("Lunch",     lunch_slot),
-                         ("Dinner",    dinner_slot)]
 
         for meal_name, target in meal_plan:
             ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
@@ -614,42 +644,65 @@ def generate_weekly_schedule(
             ))
             logger.info(f"Placed commitment '{fc['title']}' on day {d_idx} slots {fc_s}-{fc_s+fc_n}")
 
-    # ── 3e/3f: Gym and Muay Thai across the week ──────────────────────────────
+    # ── 3e/3f: Gym and Muay Thai — LOCKED, placed before flexible tasks ──────────
     AFTERNOON_START = 26   # 13:00
 
-    gym_assigned = 0
-    for day_idx in GYM_PREFERRED:
-        if gym_assigned >= gym_days_per_week:
-            break
-        day_date = week_start_date + timedelta(days=day_idx)
-        cutoff = schedule_start_slot if day_date == schedule_start_date else 0
-        gs = find_free_slot(time_map, day_idx, gym_slots,
-                            start_from=max(AFTERNOON_START, cutoff), end_before=night_routine_start)
-        if gs is None:
-            gs = find_free_slot(time_map, day_idx, gym_slots,
-                                start_from=max(wake_slot + routine_slots, cutoff),
-                                end_before=night_routine_start)
-        if gs is not None:
-            mark_occupied(time_map, day_idx, gs, gym_slots)
-            blocks.append(_block(user_id, day_date, "gym", "Gym", gs, gym_slots))
-            gym_assigned += 1
+    def _place_workout(
+        day_pref_order: List[int],
+        target_count: int,
+        total_slots: int,
+        session_slots: int,
+        commute_n: int,
+        block_type: str,
+        title: str,
+        commute_to_label: str,
+        commute_from_label: str,
+    ) -> int:
+        assigned = 0
+        for day_idx in day_pref_order:
+            if assigned >= target_count:
+                break
+            day_date = week_start_date + timedelta(days=day_idx)
+            cutoff = schedule_start_slot if day_date == schedule_start_date else 0
+            start = find_free_slot(time_map, day_idx, total_slots,
+                                   start_from=max(AFTERNOON_START, cutoff),
+                                   end_before=night_routine_start)
+            if start is None:
+                start = find_free_slot(time_map, day_idx, total_slots,
+                                       start_from=max(wake_slot + routine_slots, cutoff),
+                                       end_before=night_routine_start)
+            if start is not None:
+                if commute_n > 0:
+                    mark_occupied(time_map, day_idx, start, commute_n)
+                    blocks.append(_block(user_id, day_date, "commute", commute_to_label,
+                                         start, commute_n))
+                session_start = start + commute_n
+                mark_occupied(time_map, day_idx, session_start, session_slots)
+                blocks.append(_block(user_id, day_date, block_type, title,
+                                      session_start, session_slots, is_locked=True))
+                if commute_n > 0:
+                    return_start = session_start + session_slots
+                    mark_occupied(time_map, day_idx, return_start, commute_n)
+                    blocks.append(_block(user_id, day_date, "commute", commute_from_label,
+                                         return_start, commute_n))
+                assigned += 1
+        return assigned
 
-    mt_assigned = 0
-    for day_idx in MT_PREFERRED:
-        if mt_assigned >= muay_thai_days_per_week:
-            break
-        day_date = week_start_date + timedelta(days=day_idx)
-        cutoff = schedule_start_slot if day_date == schedule_start_date else 0
-        ms = find_free_slot(time_map, day_idx, mt_slots,
-                            start_from=max(AFTERNOON_START, cutoff), end_before=night_routine_start)
-        if ms is None:
-            ms = find_free_slot(time_map, day_idx, mt_slots,
-                                start_from=max(wake_slot + routine_slots, cutoff),
-                                end_before=night_routine_start)
-        if ms is not None:
-            mark_occupied(time_map, day_idx, ms, mt_slots)
-            blocks.append(_block(user_id, day_date, "muay_thai", "Muay Thai", ms, mt_slots))
-            mt_assigned += 1
+    gym_assigned = _place_workout(
+        GYM_PREFERRED, gym_days_per_week,
+        gym_total_slots, gym_slots, gym_commute_slots,
+        "gym", "Gym", "Commute to Gym", "Return from Gym",
+    )
+    if gym_assigned < gym_days_per_week:
+        logger.warning(f"Only placed {gym_assigned}/{gym_days_per_week} gym sessions — schedule too full")
+
+    mt_assigned = _place_workout(
+        MT_PREFERRED, muay_thai_days_per_week,
+        mt_total_slots, mt_slots, mt_commute_slots,
+        "muay_thai", "Muay Thai", "Commute to Muay Thai", "Return from Muay Thai",
+    )
+    if mt_assigned < muay_thai_days_per_week:
+        logger.warning(f"Only placed {mt_assigned}/{muay_thai_days_per_week} Muay Thai sessions — schedule too full")
 
     # ── 3g: Tasks — fixed tasks placed first (slots already pre-marked in step 2)
     unscheduled_tasks: List[Task] = []

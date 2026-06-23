@@ -27,8 +27,10 @@ class WeeklyPreferences(Base):
     # Fitness
     gym_days_per_week = Column(Integer, nullable=False, default=3)
     gym_duration_mins = Column(Integer, nullable=False, default=75)
+    gym_commute_minutes = Column(Integer, nullable=True, default=15)
     muay_thai_days_per_week = Column(Integer, nullable=False, default=2)
     muay_thai_duration_mins = Column(Integer, nullable=False, default=90)
+    muay_thai_commute_minutes = Column(Integer, nullable=True, default=60)
     workout_time_preference = Column(String, nullable=False, default="morning")
 
     # Work / commute
@@ -64,5 +66,9 @@ class WeeklyPreferences(Base):
     # Commitments
     fixed_commitments = Column(Text, nullable=True)  # JSON-encoded list
     notes = Column(Text, nullable=True)
+
+    # Meal selection — JSON-encoded list e.g. '["Breakfast","Dinner"]'
+    # Null means fall back to count-based logic using meals_per_day
+    meal_types = Column(Text, nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
