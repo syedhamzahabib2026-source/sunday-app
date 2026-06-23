@@ -69,8 +69,9 @@ def _end_datetime(block_date: date, end_time: str) -> str:
 def push_blocks_to_calendar(user_id: int, block_ids: List[int]) -> None:
     """
     Background task: push a list of schedule blocks to the user's Google
-    Calendar. Creates a fresh DB session so it is safe to call after the
-    request session has closed.
+    Calendar. Stores the returned event ID on each block so it can be cleaned
+    up on re-generation. Creates a fresh DB session so it is safe to call
+    after the request session has closed.
     """
     from app.database import SessionLocal
     from app.models.user import User
@@ -106,9 +107,45 @@ def push_blocks_to_calendar(user_id: int, block_ids: List[int]) -> None:
                         "overrides":  [{"method": "popup", "minutes": 10}],
                     },
                 }
-                client.post(
+                resp = client.post(
                     _CALENDAR_EVENTS,
                     json=event,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                if resp.status_code in (200, 201):
+                    event_data = resp.json()
+                    block.google_event_id = event_data.get("id")
+
+        db.commit()
+    finally:
+        db.close()
+
+
+def delete_calendar_events(user_id: int, event_ids: List[str]) -> None:
+    """
+    Background task: delete a list of Google Calendar events by their event IDs.
+    Called before re-generating a schedule to avoid duplicate calendar entries.
+    """
+    from app.database import SessionLocal
+    from app.models.user import User
+
+    if not event_ids:
+        return
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return
+
+        access_token = _refresh_if_needed(user, db)
+        if not access_token:
+            return
+
+        with httpx.Client() as client:
+            for event_id in event_ids:
+                client.delete(
+                    f"{_CALENDAR_EVENTS}/{event_id}",
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
     finally:

@@ -132,12 +132,26 @@ def generate_schedule(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
+    from datetime import timedelta
     from app.engines.scheduler import generate_weekly_schedule
 
     try:
         week_start = date.fromisoformat(payload.week_start_date)
     except ValueError:
         raise HTTPException(status_code=422, detail="week_start_date must be YYYY-MM-DD")
+
+    # Collect existing GCal event IDs before wiping blocks so we can clean them up
+    week_end = week_start + timedelta(days=6)
+    old_event_ids: List[str] = [
+        row.google_event_id
+        for row in db.query(ScheduleBlock.google_event_id).filter(
+            ScheduleBlock.user_id == current_user.id,
+            ScheduleBlock.date >= week_start,
+            ScheduleBlock.date <= week_end,
+            ScheduleBlock.google_event_id.isnot(None),
+        ).all()
+        if row.google_event_id
+    ]
 
     generation_ts = None if payload.week_target == "next" else payload.generation_timestamp
 
@@ -146,10 +160,12 @@ def generate_schedule(
         generation_timestamp=generation_ts,
     )
 
-    # Push to Google Calendar in the background (non-blocking)
+    # Delete old GCal events then push new blocks (both non-blocking)
     if current_user.google_access_token:
+        from app.services.google_calendar import push_blocks_to_calendar, delete_calendar_events
+        if old_event_ids:
+            background_tasks.add_task(delete_calendar_events, current_user.id, old_event_ids)
         block_ids = [b.id for b in result["blocks"]]
-        from app.services.google_calendar import push_blocks_to_calendar
         background_tasks.add_task(push_blocks_to_calendar, current_user.id, block_ids)
 
     return {

@@ -21,5 +21,6 @@ class ScheduleBlock(Base):
     priority = Column(String, nullable=True)
     status = Column(String, nullable=True)          # complete / missed / skipped / None
     is_rescheduled = Column(Boolean, nullable=False, default=False)
+    google_event_id = Column(String, nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

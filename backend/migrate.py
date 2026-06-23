@@ -65,6 +65,7 @@ def run_migrations() -> None:
     _add_column_if_missing("tasks",               "is_recurring",      "BOOLEAN DEFAULT FALSE")
     _add_column_if_missing("weekly_preferences",  "deep_work_enabled",          "BOOLEAN DEFAULT FALSE")
     _add_column_if_missing("weekly_preferences",  "deep_work_session_duration", "INTEGER DEFAULT 120")
+    _add_column_if_missing("schedule_blocks",     "google_event_id",  "VARCHAR")
     # V2 — Google OAuth + auth
     _add_column_if_missing("users", "google_id",            "VARCHAR")
     _add_column_if_missing("users", "avatar_url",           "VARCHAR")

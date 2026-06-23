@@ -7,7 +7,7 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -166,6 +166,7 @@ class GenerateWithLifecycleRequest(BaseModel):
 @router.post("/generate")
 def generate_with_lifecycle(
     payload: GenerateWithLifecycleRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
@@ -185,6 +186,19 @@ def generate_with_lifecycle(
     is_upcoming  = week_start >= next_monday
     new_status   = "pending" if (is_sunday and is_upcoming) else "active"
 
+    # Collect existing GCal event IDs before generation so we can clean them up
+    week_end = week_start + timedelta(days=6)
+    old_event_ids: List[str] = [
+        row.google_event_id
+        for row in db.query(ScheduleBlock.google_event_id).filter(
+            ScheduleBlock.user_id == current_user.id,
+            ScheduleBlock.date >= week_start,
+            ScheduleBlock.date <= week_end,
+            ScheduleBlock.google_event_id.isnot(None),
+        ).all()
+        if row.google_event_id
+    ]
+
     result = generate_weekly_schedule(current_user.id, week_start, db)
 
     rec = (
@@ -203,6 +217,14 @@ def generate_with_lifecycle(
     else:
         rec.status = new_status
     db.commit()
+
+    # Delete old GCal events then push new blocks (both non-blocking)
+    if current_user.google_access_token:
+        from app.services.google_calendar import push_blocks_to_calendar, delete_calendar_events
+        if old_event_ids:
+            background_tasks.add_task(delete_calendar_events, current_user.id, old_event_ids)
+        block_ids = [b.id for b in result["blocks"]]
+        background_tasks.add_task(push_blocks_to_calendar, current_user.id, block_ids)
 
     return {
         "week_start":        str(result["week_start"]),
