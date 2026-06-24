@@ -1535,25 +1535,33 @@ function AIQuickPrefs({ data, set }: {
     <div className="mb-8 bg-indigo-50/40 border border-indigo-100 rounded-2xl p-5 space-y-5">
       <p className="text-[13px] font-semibold text-indigo-700 uppercase tracking-widest">Quick preferences</p>
 
-      {/* Meals per day */}
+      {/* Which meals */}
       <div>
-        <p className="text-[14px] font-medium text-gray-700 mb-2">How many meals do you eat per day?</p>
-        <div className="flex gap-2">
-          {[2, 3, 4].map(n => (
-            <button
-              key={n}
-              type="button"
-              onClick={() => set("ai_meals_per_day", n)}
-              className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
-                data.ai_meals_per_day === n
-                  ? "bg-indigo-600 text-white border-indigo-600"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-              }`}
-            >
-              {n === 4 ? "4+" : n} meals
-            </button>
-          ))}
+        <p className="text-[14px] font-medium text-gray-700 mb-2">Which meals do you eat?</p>
+        <div className="flex flex-wrap gap-2">
+          {(["Breakfast", "Lunch", "Dinner", "Snack"] as const).map(meal => {
+            const active = data.selected_meals.includes(meal);
+            return (
+              <button key={meal} type="button"
+                onClick={() => {
+                  const next = active
+                    ? data.selected_meals.filter(m => m !== meal)
+                    : [...data.selected_meals, meal];
+                  set("selected_meals", next);
+                  set("meals_per_day", next.length);
+                  set("ai_meals_per_day", next.length || 1);
+                }}
+                className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
+                  active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                }`}>
+                {meal}
+              </button>
+            );
+          })}
         </div>
+        {data.selected_meals.length === 0 && (
+          <p className="text-[13px] text-amber-600 mt-1">Pick at least one meal.</p>
+        )}
       </div>
 
       {/* Meal duration */}
@@ -1577,47 +1585,46 @@ function AIQuickPrefs({ data, set }: {
         </div>
       </div>
 
-      {/* Meal timing */}
-      <MealTimingRow meal="Breakfast" value={data.breakfast_timing}
-        onChange={v => set("breakfast_timing", v)} />
-      {data.ai_meals_per_day >= 3 && (
+      {/* Meal timing — only for selected meals */}
+      {data.selected_meals.includes("Breakfast") && (
+        <MealTimingRow meal="Breakfast" value={data.breakfast_timing}
+          onChange={v => set("breakfast_timing", v)} />
+      )}
+      {data.selected_meals.includes("Lunch") && (
         <MealTimingRow meal="Lunch" value={data.lunch_timing}
           onChange={v => set("lunch_timing", v)} />
       )}
-      {data.ai_meals_per_day >= 2 && (
+      {data.selected_meals.includes("Dinner") && (
         <MealTimingRow meal="Dinner" value={data.dinner_timing}
           onChange={v => set("dinner_timing", v)} />
       )}
 
-      {/* Exercise */}
+      {/* Gym sessions */}
       <div>
-        <p className="text-[14px] font-medium text-gray-700 mb-2">Do you exercise regularly?</p>
-        <div className="flex gap-2 flex-wrap">
-          {([
-            { val: "none"      as AIExercise, label: "No" },
-            { val: "sometimes" as AIExercise, label: "A few times a week" },
-            { val: "daily"     as AIExercise, label: "Daily" },
-          ]).map(opt => (
-            <button
-              key={opt.val}
-              type="button"
-              onClick={() => set("ai_exercise", opt.val)}
-              className={`px-4 py-2 rounded-full text-[14px] font-medium border transition-all ${
-                data.ai_exercise === opt.val
-                  ? "bg-indigo-600 text-white border-indigo-600"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
+        <p className="text-[14px] font-medium text-gray-700 mb-2">How many gym sessions this week?</p>
+        <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.gym_days_per_week} onChange={v => set("gym_days_per_week", v)} />
+        {data.gym_days_per_week > 0 && (
+          <div className="mt-3 bg-white rounded-xl border border-gray-100">
+            <Stepper label="Commute each way" value={data.gym_commute_minutes} onChange={v => set("gym_commute_minutes", v)} min={0} max={120} step={5} />
+          </div>
+        )}
       </div>
 
-      {/* Commute */}
+      {/* Muay Thai sessions */}
+      <div>
+        <p className="text-[14px] font-medium text-gray-700 mb-2">How many Muay Thai sessions this week?</p>
+        <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.muay_thai_days_per_week} onChange={v => set("muay_thai_days_per_week", v)} />
+        {data.muay_thai_days_per_week > 0 && (
+          <div className="mt-3 bg-white rounded-xl border border-gray-100">
+            <Stepper label="Commute each way" value={data.muay_thai_commute_minutes} onChange={v => set("muay_thai_commute_minutes", v)} min={0} max={120} step={5} />
+          </div>
+        )}
+      </div>
+
+      {/* Work commute */}
       <div>
         <div className="flex items-center justify-between">
-          <p className="text-[14px] font-medium text-gray-700">Do you have a commute?</p>
+          <p className="text-[14px] font-medium text-gray-700">Do you have a work commute?</p>
           <Toggle checked={data.ai_has_commute} onChange={v => set("ai_has_commute", v)} />
         </div>
         {data.ai_has_commute && (
@@ -2313,8 +2320,8 @@ export default function SetupPage() {
       weekTarget === "next" ? getFollowingMonday() : getCurrentMonday()
     );
     const serializedCommitments = genData.fixed_commitments;
-    const effectiveSelectedMeals = genMode === "ai" ? null : genData.selected_meals;
-    const effectiveMealsPerDay = genMode === "ai" ? genData.ai_meals_per_day : genData.selected_meals.length;
+    const effectiveSelectedMeals = genData.selected_meals;
+    const effectiveMealsPerDay = genData.selected_meals.length;
 
     await savePreferences({
       week_start_date: weekStart,
@@ -2329,9 +2336,7 @@ export default function SetupPage() {
       meal_duration_mins: genMode === "ai" ? genData.ai_meal_duration_mins : genData.meal_duration_mins,
       meal_prep_days: genData.meal_prep_days,
       meal_types: effectiveSelectedMeals,
-      gym_days_per_week: genMode === "ai"
-        ? (genData.ai_exercise === "none" ? 0 : genData.ai_exercise === "sometimes" ? 3 : 5)
-        : genData.gym_days_per_week,
+      gym_days_per_week: genData.gym_days_per_week,
       gym_duration_mins: genData.gym_duration_mins,
       gym_commute_minutes: genData.gym_commute_minutes,
       muay_thai_days_per_week: genData.muay_thai_days_per_week,
@@ -2351,12 +2356,9 @@ export default function SetupPage() {
       mode: genMode,
       extra_context: genData.extra_context || null,
       scheduling_notes: genData.extra_context || null,
-      meal_breakfast_time: (genMode === "ai" || genData.selected_meals.includes("Breakfast"))
-        ? BREAKFAST_TIMES[genData.breakfast_timing] : null,
-      meal_lunch_time: (genMode === "ai" ? effectiveMealsPerDay >= 3 : genData.selected_meals.includes("Lunch"))
-        ? LUNCH_TIMES[genData.lunch_timing] : null,
-      meal_dinner_time: (genMode === "ai" ? effectiveMealsPerDay >= 2 : genData.selected_meals.includes("Dinner"))
-        ? DINNER_TIMES[genData.dinner_timing] : null,
+      meal_breakfast_time: genData.selected_meals.includes("Breakfast") ? BREAKFAST_TIMES[genData.breakfast_timing] : null,
+      meal_lunch_time: genData.selected_meals.includes("Lunch") ? LUNCH_TIMES[genData.lunch_timing] : null,
+      meal_dinner_time: genData.selected_meals.includes("Dinner") ? DINNER_TIMES[genData.dinner_timing] : null,
       deep_work_enabled: genData.deep_work_enabled,
       deep_work_session_duration: genData.deep_work_session_duration,
     });
