@@ -12,7 +12,9 @@ export type BlockType =
   | "routine"
   | "buffer"
   | "event"
-  | "deep_work";
+  | "deep_work"
+  | "commitment"
+  | "shower";
 
 export interface ScheduleBlock {
   id: number;
@@ -59,6 +61,8 @@ export interface FixedCommitment {
   days: string[];        // for recurring: ["Monday", "Wednesday", ...]
   date?: string | null;  // for one-off: "YYYY-MM-DD"
   recurring: boolean;
+  commute_minutes?: number;    // one-way travel; scheduler blocks it both ways
+  location?: string | null;    // saved location/job name this commute came from
 }
 
 export interface WeeklyPreferences {
@@ -90,6 +94,9 @@ export interface WeeklyPreferences {
   meal_types: string[] | null;
   gym_commute_minutes: number | null;
   muay_thai_commute_minutes: number | null;
+  gym_preferred_time: string | null;        // "HH:MM" — specific start time for gym
+  muay_thai_preferred_time: string | null;  // "HH:MM" — specific start time for MT
+  gym_split_labels: string[] | null;        // e.g. ["Leg Day","Chest Day","Shoulder Day","Back Day"]
   notes: string | null;
   mode: string;
   extra_context: string | null;

@@ -69,6 +69,10 @@ def run_migrations() -> None:
     _add_column_if_missing("weekly_preferences",  "meal_types",        "TEXT")
     _add_column_if_missing("weekly_preferences",  "gym_commute_minutes",        "INTEGER DEFAULT 15")
     _add_column_if_missing("weekly_preferences",  "muay_thai_commute_minutes",  "INTEGER DEFAULT 60")
+    # Per-activity preferred start times + gym split labels
+    _add_column_if_missing("weekly_preferences",  "gym_preferred_time",         "VARCHAR")
+    _add_column_if_missing("weekly_preferences",  "muay_thai_preferred_time",   "VARCHAR")
+    _add_column_if_missing("weekly_preferences",  "gym_split_labels",           "TEXT")
     # V2 — Google OAuth + auth
     _add_column_if_missing("users", "google_id",            "VARCHAR")
     _add_column_if_missing("users", "avatar_url",           "VARCHAR")

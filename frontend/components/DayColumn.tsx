@@ -9,7 +9,9 @@ function getAccent(block: ScheduleBlock): string {
     case "gym":
     case "muay_thai": return "#ea580c";
     case "commute":   return "#7c3aed";
-    case "event":     return "#0891b2";
+    case "event":
+    case "commitment": return "#0891b2";
+    case "shower":    return "#0ea5e9";
     case "routine":
     case "buffer":    return "#a1a1aa";
     case "deep_work": return "#2563eb";

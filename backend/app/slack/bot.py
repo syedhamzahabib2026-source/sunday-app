@@ -22,7 +22,22 @@ app = App(
 )
 
 BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8080/api/v1")
-USER_ID = 1
+USER_ID = int(os.getenv("BOT_USER_ID", "1"))
+
+# ── API auth — the bot signs its own JWT with the shared backend secret ───────
+
+_BOT_TOKEN: Optional[str] = None
+_BOT_TOKEN_MINTED: Optional[datetime] = None
+
+
+def _auth_headers() -> dict:
+    global _BOT_TOKEN, _BOT_TOKEN_MINTED
+    now = datetime.utcnow()
+    if _BOT_TOKEN is None or _BOT_TOKEN_MINTED is None or (now - _BOT_TOKEN_MINTED).days >= 30:
+        from app.auth import create_access_token
+        _BOT_TOKEN = create_access_token(USER_ID)
+        _BOT_TOKEN_MINTED = now
+    return {"Authorization": f"Bearer {_BOT_TOKEN}"}
 
 # Keyed by Slack user_id: {"flow": str, "step": str, "data": dict}
 conversation_state: dict = {}
@@ -127,19 +142,19 @@ def parse_intent(message_text: str, state: Optional[dict] = None) -> dict:
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 def _api_get(path: str):
-    resp = requests.get(f"{BASE_URL}{path}", timeout=10)
+    resp = requests.get(f"{BASE_URL}{path}", headers=_auth_headers(), timeout=10)
     resp.raise_for_status()
     return resp.json()
 
 
 def _api_post(path: str, payload: dict):
-    resp = requests.post(f"{BASE_URL}{path}", json=payload, timeout=15)
+    resp = requests.post(f"{BASE_URL}{path}", json=payload, headers=_auth_headers(), timeout=15)
     resp.raise_for_status()
     return resp.json()
 
 
 def _api_patch(path: str, payload: Optional[dict] = None):
-    kwargs: dict = {"timeout": 10}
+    kwargs: dict = {"timeout": 10, "headers": _auth_headers()}
     if payload is not None:
         kwargs["json"] = payload
     resp = requests.patch(f"{BASE_URL}{path}", **kwargs)
@@ -148,7 +163,7 @@ def _api_patch(path: str, payload: Optional[dict] = None):
 
 
 def _api_delete(path: str):
-    resp = requests.delete(f"{BASE_URL}{path}", timeout=10)
+    resp = requests.delete(f"{BASE_URL}{path}", headers=_auth_headers(), timeout=10)
     resp.raise_for_status()
 
 
@@ -170,7 +185,7 @@ def _fmt_date(d: date) -> str:
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 def _active_tasks() -> list:
-    all_tasks = _api_get(f"/tasks/{USER_ID}")
+    all_tasks = _api_get("/tasks/")
     return [t for t in all_tasks if t["status"] in ("pending", "scheduled")]
 
 
@@ -218,7 +233,7 @@ def _find_task_block(task_id: int) -> Optional[dict]:
     for offset in (0, 1):
         week_start = monday + timedelta(weeks=offset)
         try:
-            blocks = _api_get(f"/schedule/{USER_ID}/week/{week_start}")
+            blocks = _api_get(f"/schedule/week/{week_start}")
             for b in blocks:
                 if b.get("task_id") == task_id:
                     return b
@@ -228,7 +243,7 @@ def _find_task_block(task_id: int) -> Optional[dict]:
 
 
 def _do_reorganize() -> str:
-    data = _api_post("/schedule/reorganize", {"user_id": USER_ID, "reason": "manual"})
+    data = _api_post("/schedule/reorganize", {"reason": "manual"})
     placed = len(data.get("tasks_rescheduled", []))
     dropped = len(data.get("tasks_dropped", []))
     msg = f"Schedule updated — {placed} task{'s' if placed != 1 else ''} placed"
@@ -270,7 +285,7 @@ def _cancel_matching_block(type_hint: str, day_hint: str, say) -> bool:
         return False
 
     try:
-        blocks = _api_get(f"/schedule/{USER_ID}/day/{target}")
+        blocks = _api_get(f"/schedule/day/{target}")
     except Exception:
         return False
 
@@ -464,7 +479,6 @@ def _extract_duration_minutes(text: str) -> Optional[int]:
 def _handle_generate_schedule(say):
     monday = _this_monday()
     data = _api_post("/schedule/generate", {
-        "user_id": USER_ID,
         "week_start_date": str(monday),
     })
     lines = [
@@ -483,7 +497,7 @@ def _handle_generate_schedule(say):
 
 def _handle_my_schedule(say):
     today = _today()
-    blocks = _api_get(f"/schedule/{USER_ID}/day/{today}")
+    blocks = _api_get(f"/schedule/day/{today}")
     if not blocks:
         say(f"Nothing scheduled for {_fmt_date(today)}.")
         return
@@ -491,6 +505,7 @@ def _handle_my_schedule(say):
         "sleep": ":zzz:", "routine": ":sparkles:", "meal": ":fork_and_knife:",
         "commute": ":bus:", "gym": ":muscle:", "muay_thai": ":martial_arts_uniform:",
         "task": ":white_check_mark:", "buffer": ":hourglass:",
+        "shower": ":shower:", "commitment": ":briefcase:", "deep_work": ":brain:",
     }
     lines = [f"*Your schedule for {_fmt_date(today)}:*"]
     for b in blocks:
@@ -501,7 +516,7 @@ def _handle_my_schedule(say):
 
 
 def _handle_my_tasks(say):
-    all_tasks = _api_get(f"/tasks/{USER_ID}")
+    all_tasks = _api_get("/tasks/")
     logger.debug("tasks API response count: %d", len(all_tasks) if isinstance(all_tasks, list) else -1)
     ACTIVE_STATUSES = {"pending", "scheduled", "partial", "missed"}
     tasks = [t for t in all_tasks if t["status"] in ACTIVE_STATUSES]
@@ -524,7 +539,7 @@ def _handle_my_tasks(say):
 
 
 def _handle_reschedule(say):
-    data = _api_post("/schedule/reorganize", {"user_id": USER_ID, "reason": "manual"})
+    data = _api_post("/schedule/reorganize", {"reason": "manual"})
     placed = len(data.get("tasks_rescheduled", []))
     dropped = len(data.get("tasks_dropped", []))
     at_risk = len(data.get("deadline_at_risk", []))
@@ -553,21 +568,21 @@ def _start_add_task(user_id: str, seed: dict, say):
 
 
 def _ask_next_add_task_question(user_id: str, data: dict, say):
-    """Ask only for the next missing required field, or save immediately if all present."""
+    """Ask only for the next missing required field, or save immediately if all present.
+
+    Only title and duration are ever asked. Priority defaults to medium and
+    deadline defaults to none — mention them in the message to set them.
+    """
     if "title" not in data:
         conversation_state[user_id] = {"flow": "add_task", "step": "ask_name", "data": data}
         say("What's the task name?")
     elif "duration_minutes" not in data:
         conversation_state[user_id] = {"flow": "add_task", "step": "ask_duration", "data": data}
         say(f"How long will *{data['title']}* take? *(minutes, e.g. 45)*")
-    elif "priority" not in data:
-        conversation_state[user_id] = {"flow": "add_task", "step": "ask_priority", "data": data}
-        say(f"What's the priority for *{data['title']}*?\n*critical / high / medium / low / optional*")
-    elif "deadline_answered" not in data:
-        data["deadline_answered"] = True
-        conversation_state[user_id] = {"flow": "add_task", "step": "ask_deadline", "data": data}
-        say("When is this due? Say a date like *Monday*, *tomorrow*, *Dec 15*, or *no deadline*.")
     else:
+        data.setdefault("priority", "medium")
+        data.setdefault("deadline", None)
+        data["deadline_answered"] = True
         _complete_add_task(user_id, data, say)
 
 
@@ -575,7 +590,6 @@ def _complete_add_task(user_id: str, data: dict, say):
     conversation_state.pop(user_id, None)
     energy = _energy_from_priority(data.get("priority", "medium"))
     payload = {
-        "user_id": USER_ID,
         "title": data["title"],
         "duration_minutes": int(data["duration_minutes"]),
         "priority": data["priority"],
@@ -585,7 +599,7 @@ def _complete_add_task(user_id: str, data: dict, say):
     }
     logger.debug("POST /tasks/ payload title=%r dur=%r", payload["title"], payload["duration_minutes"])
     try:
-        resp = requests.post(f"{BASE_URL}/tasks/", json=payload, timeout=15)
+        resp = requests.post(f"{BASE_URL}/tasks/", json=payload, headers=_auth_headers(), timeout=15)
         if not resp.ok:
             logger.warning("task save failed %d: %s", resp.status_code, resp.text)
             resp.raise_for_status()
@@ -788,7 +802,7 @@ def _handle_day_query(data: dict, say):
     if not target:
         say(f"I couldn't understand *{day_str}*. Try 'Wednesday', 'tomorrow', or 'Friday'.")
         return
-    blocks = _api_get(f"/schedule/{USER_ID}/day/{target}")
+    blocks = _api_get(f"/schedule/day/{target}")
     if not blocks:
         say(f"Nothing scheduled for *{_fmt_date(target)}*.")
         return
@@ -796,6 +810,7 @@ def _handle_day_query(data: dict, say):
         "sleep": ":zzz:", "routine": ":sparkles:", "meal": ":fork_and_knife:",
         "commute": ":bus:", "gym": ":muscle:", "muay_thai": ":martial_arts_uniform:",
         "task": ":white_check_mark:", "buffer": ":hourglass:", "event": ":calendar:",
+        "shower": ":shower:", "commitment": ":briefcase:", "deep_work": ":brain:",
     }
     lines = [f"*Schedule for {_fmt_date(target)}:*"]
     for b in blocks:
@@ -870,13 +885,13 @@ def _execute_event_plan(user_id: str, title: str, target_date, start_time: str, 
         resp = requests.post(
             f"{BASE_URL}/schedules/event",
             json={
-                "user_id": USER_ID,
                 "date": str(target_date),
                 "title": title,
                 "start_time": start_time,
                 "end_time": end_time,
                 "dry_run": True,
             },
+            headers=_auth_headers(),
             timeout=15,
         )
         resp.raise_for_status()
@@ -891,20 +906,22 @@ def _execute_event_plan(user_id: str, title: str, target_date, start_time: str, 
             apply_resp = requests.post(
                 f"{BASE_URL}/schedules/event",
                 json={
-                    "user_id": USER_ID,
                     "date": str(target_date),
                     "title": title,
                     "start_time": start_time,
                     "end_time": end_time,
                     "dry_run": False,
                 },
+                headers=_auth_headers(),
                 timeout=15,
             )
             apply_resp.raise_for_status()
             result = apply_resp.json()
             summary = result.get("summary", "Schedule updated.")
+            commute = result.get("commute_minutes") or 0
+            commute_note = f" (+{commute} min travel each way)" if commute else ""
             say(
-                f":calendar: *{title}* added for *{day_label}* {start_time}–{end_time}.\n{summary}"
+                f":calendar: *{title}* added for *{day_label}* {start_time}–{end_time}{commute_note}.\n{summary}"
             )
         except Exception as exc:
             say(f"Failed to add event. ({exc})")
@@ -916,7 +933,6 @@ def _execute_event_plan(user_id: str, title: str, target_date, start_time: str, 
         "step": "waiting_confirm",
         "data": {
             "event": {
-                "user_id": USER_ID,
                 "date": str(target_date),
                 "title": title,
                 "start_time": start_time,
@@ -985,12 +1001,15 @@ def _continue_confirm_reorg(user_id: str, text: str, say):
     if lower in _YES:
         del conversation_state[user_id]
         try:
-            resp = requests.post(f"{BASE_URL}/schedules/event", json=event_data, timeout=15)
+            resp = requests.post(f"{BASE_URL}/schedules/event", json=event_data,
+                                 headers=_auth_headers(), timeout=15)
             resp.raise_for_status()
             result = resp.json()
+            commute = result.get("commute_minutes") or 0
+            commute_note = f" (+{commute} min travel each way)" if commute else ""
             say(
                 f":white_check_mark: Done. *{event_data['title']}* added for *{day_label}*"
-                f" {event_data['start_time']}–{event_data['end_time']}.\n"
+                f" {event_data['start_time']}–{event_data['end_time']}{commute_note}.\n"
                 f"{result.get('summary', 'Schedule updated.')}"
             )
         except Exception as exc:

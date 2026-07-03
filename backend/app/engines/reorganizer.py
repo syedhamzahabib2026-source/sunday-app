@@ -3,6 +3,7 @@ Reorganization engine for Sunday V1.
 Rebuilds the future portion of the current week's schedule without touching
 any locked blocks or blocks that are already in the past.
 """
+import json
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
 
@@ -115,13 +116,23 @@ def reorganize_schedule(
     commute_minutes         = p("commute_minutes",         30)
     is_remote               = p("is_remote",               False)
 
+    # Explicit meal selection (JSON list) — mirrors the scheduler's behavior
+    _meal_types_raw = p("meal_types", None)
+    selected_meal_types = None
+    if _meal_types_raw:
+        try:
+            _parsed = json.loads(_meal_types_raw)
+            selected_meal_types = _parsed if isinstance(_parsed, list) else None
+        except Exception:
+            selected_meal_types = None
+
     wake_slot           = time_to_slot(preferred_wake_time)
     bed_slot            = time_to_slot(preferred_bedtime)
     routine_slots       = slots_needed(morning_routine_mins)
     night_routine_slots = slots_needed(night_routine_mins)
     commute_slots       = slots_needed(commute_minutes)
-    gym_slots           = slots_needed(GYM_DURATION_MINS)
-    mt_slots            = slots_needed(MT_DURATION_MINS)
+    gym_slots           = slots_needed(int(p("gym_duration_mins", GYM_DURATION_MINS) or GYM_DURATION_MINS))
+    mt_slots            = slots_needed(int(p("muay_thai_duration_mins", MT_DURATION_MINS) or MT_DURATION_MINS))
     night_routine_start = max(wake_slot + routine_slots, bed_slot - night_routine_slots)
 
     # Pre-mark immovable fixed slots on every day
@@ -261,12 +272,20 @@ def reorganize_schedule(
                 new_blocks.append(_block(user_id, day_date, "commute", "Commute (Evening)",
                                          pm, commute_slots))
 
-        # Meals
+        # Meals — honor explicit meal_types selection, fall back to count
         breakfast_target = max(after_morning + 1, future_start)
         lunch_target     = max(time_to_slot("12:30"), future_start)
         dinner_target    = max(time_to_slot("19:00"), future_start)
 
-        if meals_per_day == 1:
+        _meal_targets = {
+            "Breakfast": breakfast_target,
+            "Lunch":     lunch_target,
+            "Dinner":    dinner_target,
+            "Snack":     max(time_to_slot("15:30"), future_start),
+        }
+        if selected_meal_types:
+            meal_plan = [(m, _meal_targets[m]) for m in selected_meal_types if m in _meal_targets]
+        elif meals_per_day == 1:
             meal_plan = [("Breakfast", breakfast_target)]
         elif meals_per_day == 2:
             meal_plan = [("Breakfast", breakfast_target), ("Dinner", dinner_target)]
@@ -276,8 +295,17 @@ def reorganize_schedule(
                          ("Dinner",    dinner_target)]
 
         for meal_name, target in meal_plan:
+            # Mirror the scheduler: near target, then just before it, then anywhere after
             ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
-                                start_from=target, end_before=night_routine_start)
+                                start_from=target,
+                                end_before=min(target + 4 + MEAL_DURATION_SLOTS, night_routine_start))
+            if ms is None:
+                ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
+                                    start_from=max(future_start, target - 4),
+                                    end_before=min(target, night_routine_start))
+            if ms is None:
+                ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
+                                    start_from=target, end_before=night_routine_start)
             if ms is None:
                 ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
                                     start_from=future_start, end_before=night_routine_start)

@@ -121,15 +121,21 @@ def build_event_plan(
     event_start_slot: int,
     event_end_slot: int,
     event_title: str,
+    commute_slots: int = 0,
 ) -> Tuple[ReorgPlan, List[int], List[int]]:
     """
     Plan the changes needed to accommodate a new fixed event block.
+    commute_slots reserves travel time on both sides of the event.
     Does NOT write to the database.
 
     Returns:
       (plan, displaced_block_ids, displaced_task_ids)
     """
     plan = ReorgPlan()
+
+    # Widen the occupied window to cover travel there and back
+    window_start = max(0, event_start_slot - commute_slots)
+    window_end   = min(SLOTS_PER_DAY, event_end_slot + commute_slots)
 
     week_start = event_date - timedelta(days=event_date.weekday())
     week_end = week_start + timedelta(days=6)
@@ -179,11 +185,11 @@ def build_event_plan(
         )
         frozen = block.is_locked or is_past
 
-        # Check overlap with event window (same day only)
+        # Check overlap with event window incl. commute (same day only)
         overlaps_event = (
             day_idx == event_day_idx
-            and start_s < event_end_slot
-            and end_s > event_start_slot
+            and start_s < window_end
+            and end_s > window_start
             and block.block_type == "task"
             and not frozen
         )
@@ -202,9 +208,9 @@ def build_event_plan(
                 slot_task.update({(day_idx, s): block.task_id for s in range(start_s, start_s + n_slots)})
                 task_placements[block.task_id] = (day_idx, start_s, n_slots)
 
-    # Mark event window as occupied
-    mark_occupied(time_map, event_day_idx, event_start_slot,
-                  event_end_slot - event_start_slot)
+    # Mark event window (plus commute buffer) as occupied
+    mark_occupied(time_map, event_day_idx, window_start,
+                  window_end - window_start)
 
     if not displaced_task_ids:
         return plan, displaced_block_ids, displaced_task_ids
@@ -389,6 +395,7 @@ def apply_event_plan(
     displaced_block_ids: List[int],
     displaced_task_ids: List[int],
     reason: str = "event_add",
+    commute_slots: int = 0,
 ) -> Dict[str, Any]:
     """Apply the event and its reorganization plan to the database."""
     now = datetime.now()
@@ -408,7 +415,7 @@ def apply_event_plan(
         ).update({"status": "pending"}, synchronize_session=False)
         db.flush()
 
-    # 3. Create the fixed event block
+    # 3. Create the fixed event block (with commute blocks when travel is known)
     event_block = ScheduleBlock(
         user_id=user_id,
         block_type="event",
@@ -420,9 +427,19 @@ def apply_event_plan(
         priority=None,
     )
     db.add(event_block)
+    blocks_created = 1  # the event block itself
+
+    if commute_slots > 0:
+        if event_start_slot - commute_slots >= 0:
+            db.add(_block(user_id, event_date, "commute", f"Commute to {event_title}",
+                          event_start_slot - commute_slots, commute_slots, is_locked=True))
+            blocks_created += 1
+        if event_end_slot + commute_slots <= SLOTS_PER_DAY:
+            db.add(_block(user_id, event_date, "commute", f"Commute from {event_title}",
+                          event_end_slot, commute_slots, is_locked=True))
+            blocks_created += 1
 
     # 4. Create new task blocks from the plan
-    blocks_created = 1  # the event block itself
     placed_task_ids: Set[int] = set()
 
     for move in plan.moves:

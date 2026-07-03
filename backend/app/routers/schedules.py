@@ -246,6 +246,21 @@ class EventRequest(BaseModel):
     start_time: str
     end_time: str
     dry_run: bool = True
+    # One-way travel minutes. None = auto-resolve from saved locations by name.
+    commute_minutes: Optional[int] = None
+
+
+def _resolve_commute_from_locations(user_id: int, title: str, db: Session) -> int:
+    """Match the event title against saved locations (e.g. 'Panera shift' → Panera)."""
+    from app.models.user_location import UserLocation
+    locations = db.query(UserLocation).filter(UserLocation.user_id == user_id).all()
+    title_lower = title.lower()
+    best = 0
+    for loc in locations:
+        name = (loc.name or "").lower().strip()
+        if name and (name in title_lower or title_lower in name):
+            best = max(best, loc.commute_minutes or 0)
+    return best
 
 
 @router.post("/event")
@@ -255,7 +270,7 @@ def add_event(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     from app.engines.smart_reorganizer import build_event_plan, apply_event_plan
-    from app.engines.scheduler import time_to_slot
+    from app.engines.scheduler import time_to_slot, slots_needed
 
     try:
         event_date = date.fromisoformat(payload.date)
@@ -274,8 +289,14 @@ def add_event(
         from app.engines.scheduler import SLOTS_PER_DAY
         end_slot = SLOTS_PER_DAY
 
+    commute_mins = payload.commute_minutes
+    if commute_mins is None:
+        commute_mins = _resolve_commute_from_locations(current_user.id, payload.title, db)
+    commute_slots = slots_needed(commute_mins) if commute_mins and commute_mins > 0 else 0
+
     plan, displaced_block_ids, displaced_task_ids = build_event_plan(
-        current_user.id, db, event_date, start_slot, end_slot, payload.title
+        current_user.id, db, event_date, start_slot, end_slot, payload.title,
+        commute_slots=commute_slots,
     )
 
     if payload.dry_run:
@@ -285,15 +306,18 @@ def add_event(
             "warnings":        plan.warning_lines,
             "planned_moves":   len(plan.moves),
             "planned_drops":   [t.title for t in plan.drops],
+            "commute_minutes": commute_mins or 0,
         }
 
     result = apply_event_plan(
         current_user.id, db,
         event_date, start_slot, end_slot, payload.title,
         plan, displaced_block_ids, displaced_task_ids,
+        commute_slots=commute_slots,
     )
     return {
-        "has_warnings": plan.has_warnings,
-        "summary":      plan.format_confirm_message(),
+        "has_warnings":    plan.has_warnings,
+        "summary":         plan.format_confirm_message(),
+        "commute_minutes": commute_mins or 0,
         **result,
     }

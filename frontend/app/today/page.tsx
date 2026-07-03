@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock, TrendingUp, Zap, Sun, Moon } from "lucide-react";
 import BlockCard from "@/components/BlockCard";
+import QuickAddTask from "@/components/QuickAddTask";
 import { getTodaySchedule, updateTaskStatus, updateBlockStatus, reorganize, reorganizeMissed, ScheduleBlock } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
@@ -572,6 +573,12 @@ export default function TodayPage() {
           </div>
         </>
       )}
+
+      {/* Quick add task — reloads the day after placement */}
+      <QuickAddTask
+        onAdded={msg => { showToast(msg); load(); }}
+        onError={msg => showToast(msg, "error")}
+      />
 
       {/* Toast notifications */}
       {toasts.length > 0 && (

@@ -71,4 +71,12 @@ class WeeklyPreferences(Base):
     # Null means fall back to count-based logic using meals_per_day
     meal_types = Column(Text, nullable=True)
 
+    # Per-activity preferred start time — "HH:MM" 24h; None = no specific time
+    gym_preferred_time       = Column(String, nullable=True)
+    muay_thai_preferred_time = Column(String, nullable=True)
+
+    # Gym split labels — JSON-encoded list rotated across the week's sessions
+    # e.g. '["Leg Day","Chest Day","Shoulder Day","Back Day"]'
+    gym_split_labels = Column(Text, nullable=True)
+
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

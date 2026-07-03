@@ -28,6 +28,13 @@ const LOADING_MESSAGES = [
 
 const DRAFT_KEY = "sunday_setup_draft";
 
+const DEFAULT_SPLIT_LABELS = ["Leg Day", "Chest Day", "Shoulder Day", "Back Day"];
+
+// Meal timing → concrete time maps (shared by save + restore)
+const BREAKFAST_TIMES: Record<MealTiming, string> = { Early: "06:30", Normal: "07:30", Late: "09:00" };
+const LUNCH_TIMES:     Record<MealTiming, string> = { Early: "11:30", Normal: "12:30", Late: "14:00" };
+const DINNER_TIMES:    Record<MealTiming, string> = { Early: "17:30", Normal: "19:00", Late: "20:30" };
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Priority    = "critical" | "high" | "medium" | "low" | "optional";
@@ -47,6 +54,8 @@ interface FixedCommitment {
   days: string[];       // for recurring entries
   date?: string;        // for one-off: "YYYY-MM-DD"
   recurring: boolean;
+  commute_minutes?: number;   // one-way travel blocked before and after
+  location?: string | null;   // saved job/location this commute came from
 }
 
 interface WizardTask {
@@ -83,6 +92,9 @@ interface WizardData {
   muay_thai_duration_mins: number;
   muay_thai_commute_minutes: number;
   workout_time_preference: WorkoutTime;
+  gym_preferred_time: string;        // "HH:MM" or "" = no specific time
+  muay_thai_preferred_time: string;  // "HH:MM" or "" = no specific time
+  gym_split_labels: string[];        // rotated across the week's gym sessions
   is_remote: boolean;
   work_location_name: string;
   commute_minutes: number;
@@ -201,6 +213,9 @@ const DEFAULTS: WizardData = {
   muay_thai_duration_mins: 90,
   muay_thai_commute_minutes: 60,
   workout_time_preference: "morning",
+  gym_preferred_time: "",
+  muay_thai_preferred_time: "",
+  gym_split_labels: DEFAULT_SPLIT_LABELS,
   is_remote: true,
   work_location_name: "",
   commute_minutes: 30,
@@ -223,6 +238,17 @@ const DEFAULTS: WizardData = {
 };
 
 // ─── Last-week helpers ────────────────────────────────────────────────────────
+
+function timingFromTime(t: string | null | undefined, map: Record<MealTiming, string>): MealTiming {
+  if (!t) return "Normal";
+  let best: MealTiming = "Normal";
+  let bestDiff = Infinity;
+  (["Early", "Normal", "Late"] as MealTiming[]).forEach(k => {
+    const diff = Math.abs(timeToMins(map[k]) - timeToMins(t));
+    if (diff < bestDiff) { bestDiff = diff; best = k; }
+  });
+  return best;
+}
 
 function prefsToWizardData(prefs: WeeklyPreferences): Partial<WizardData> {
   // Restore fixed_commitments — filter to valid new-format entries only
@@ -260,6 +286,12 @@ function prefsToWizardData(prefs: WeeklyPreferences): Partial<WizardData> {
     muay_thai_duration_mins:  prefs.muay_thai_duration_mins,
     muay_thai_commute_minutes: prefs.muay_thai_commute_minutes ?? 60,
     workout_time_preference:  prefs.workout_time_preference as WorkoutTime,
+    gym_preferred_time:       prefs.gym_preferred_time ?? "",
+    muay_thai_preferred_time: prefs.muay_thai_preferred_time ?? "",
+    gym_split_labels:
+      prefs.gym_split_labels && prefs.gym_split_labels.length > 0
+        ? prefs.gym_split_labels
+        : DEFAULT_SPLIT_LABELS,
     is_remote:                prefs.is_remote,
     work_location_name:       prefs.work_location_name ?? "",
     commute_minutes:          prefs.commute_minutes,
@@ -270,6 +302,15 @@ function prefsToWizardData(prefs: WeeklyPreferences): Partial<WizardData> {
     deep_work_enabled:        prefs.deep_work_enabled,
     deep_work_session_duration: prefs.deep_work_session_duration,
     fixed_commitments:        restoredCommitments,
+    // Meal timing chips restored from concrete saved times (nearest match)
+    breakfast_timing:         timingFromTime(prefs.meal_breakfast_time, BREAKFAST_TIMES),
+    lunch_timing:             timingFromTime(prefs.meal_lunch_time,     LUNCH_TIMES),
+    dinner_timing:            timingFromTime(prefs.meal_dinner_time,    DINNER_TIMES),
+    // AI-mode quick prefs mirror the manual answers
+    ai_meal_duration_mins:    prefs.meal_duration_mins,
+    ai_has_commute:           !prefs.is_remote,
+    ai_commute_mins:          prefs.commute_minutes > 0 ? prefs.commute_minutes : 30,
+    ai_meals_per_day:         restoredMeals.length || 1,
   };
 }
 
@@ -395,6 +436,78 @@ function InlineTimePicker({ label, value, onChange }: {
             PM
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Preferred workout start time (specific time or none) ───────────────────
+
+function PreferredTimeRow({ label, value, onChange, hint }: {
+  label: string;
+  value: string;            // "HH:MM" or "" = no specific time
+  onChange: (v: string) => void;
+  hint?: string;
+}) {
+  return (
+    <div className="mt-4">
+      <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-2">{label}</p>
+      {value === "" ? (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onChange("07:00")}
+            className="px-4 py-2 rounded-full text-[14px] font-medium border bg-white text-gray-600 border-gray-200 hover:border-indigo-400 hover:text-indigo-600 transition-all"
+          >
+            + Set a specific time
+          </button>
+          <span className="text-[12px] text-gray-400">{hint ?? "Currently using your general time-of-day preference"}</span>
+        </div>
+      ) : (
+        <div className="flex items-end gap-4">
+          <InlineTimePicker label="Around" value={value} onChange={onChange} />
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="text-[12px] text-gray-400 hover:text-gray-600 transition-colors pb-2"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Gym split labels editor ─────────────────────────────────────────────────
+
+function GymSplitEditor({ count, labels, onChange }: {
+  count: number;
+  labels: string[];
+  onChange: (labels: string[]) => void;
+}) {
+  const effective = Array.from({ length: count }, (_, i) =>
+    labels[i] ?? DEFAULT_SPLIT_LABELS[i % DEFAULT_SPLIT_LABELS.length]
+  );
+  return (
+    <div className="mt-4">
+      <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Name your sessions</p>
+      <p className="text-[13px] text-gray-400 mb-3">Labels show on your weekly schedule (e.g. Leg Day).</p>
+      <div className="grid grid-cols-2 gap-2">
+        {effective.map((label, i) => (
+          <input
+            key={i}
+            type="text"
+            value={label}
+            placeholder={DEFAULT_SPLIT_LABELS[i % DEFAULT_SPLIT_LABELS.length]}
+            onChange={e => {
+              const next = [...effective];
+              next[i] = e.target.value;
+              onChange(next);
+            }}
+            className="px-3 py-2 rounded-xl border border-gray-200 text-[14px] text-gray-900 bg-white focus:outline-none focus:border-indigo-300 transition-colors"
+          />
+        ))}
       </div>
     </div>
   );
@@ -535,7 +648,7 @@ function StepShell({ headline, subtext, children }: {
 
 // ─── MODE SCREEN ──────────────────────────────────────────────────────────────
 
-function ModeScreen({ onSelect, weekTarget, setWeekTarget, lastWeekPrefs, lastWeekTasks, onUseLastWeekAsTemplate, onSameAsLastWeek }: {
+function ModeScreen({ onSelect, weekTarget, setWeekTarget, lastWeekPrefs, lastWeekTasks, onUseLastWeekAsTemplate, onSameAsLastWeek, onStartFresh }: {
   onSelect: (m: Mode) => void;
   weekTarget: "current" | "next";
   setWeekTarget: (t: "current" | "next") => void;
@@ -543,6 +656,7 @@ function ModeScreen({ onSelect, weekTarget, setWeekTarget, lastWeekPrefs, lastWe
   lastWeekTasks?: ApiTask[] | null;
   onUseLastWeekAsTemplate?: () => void;
   onSameAsLastWeek?: () => void;
+  onStartFresh?: () => void;
 }) {
   return (
     <div className="w-full max-w-lg mx-auto fade-in">
@@ -566,7 +680,7 @@ function ModeScreen({ onSelect, weekTarget, setWeekTarget, lastWeekPrefs, lastWe
             </button>
             <button
               type="button"
-              onClick={() => onSelect("manual")}
+              onClick={() => (onStartFresh ? onStartFresh() : onSelect("manual"))}
               className="flex-1 py-2.5 rounded-xl text-[13px] font-medium border border-indigo-200 text-indigo-600 hover:bg-indigo-100 transition-colors"
             >
               Start fresh
@@ -810,11 +924,25 @@ function Step3({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
               Total block per session: {fmtDuration(data.gym_commute_minutes + data.gym_duration_mins + data.gym_commute_minutes)} (travel + workout + return)
             </p>
           )}
+          {data.gym_days_per_week > 0 && (
+            <>
+              <PreferredTimeRow
+                label="Gym start time"
+                value={data.gym_preferred_time}
+                onChange={v => set("gym_preferred_time", v)}
+              />
+              <GymSplitEditor
+                count={data.gym_days_per_week}
+                labels={data.gym_split_labels}
+                onChange={labels => set("gym_split_labels", labels)}
+              />
+            </>
+          )}
         </div>
 
         {/* Muay Thai */}
         <div>
-          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Muay Thai sessions this week</p>
+          <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-1">How many times a week do you want to do Muay Thai?</p>
           <p className="text-[14px] text-gray-400 mb-3">Set to 0 if you&apos;re not going this week.</p>
           <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.muay_thai_days_per_week} onChange={v => set("muay_thai_days_per_week", v)} />
           {data.muay_thai_days_per_week > 0 && (
@@ -827,6 +955,14 @@ function Step3({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
             <p className="text-[12px] text-gray-400 mt-2">
               Total block per session: {fmtDuration(data.muay_thai_commute_minutes + data.muay_thai_duration_mins + data.muay_thai_commute_minutes)} (travel + training + return)
             </p>
+          )}
+          {data.muay_thai_days_per_week > 0 && (
+            <PreferredTimeRow
+              label="Muay Thai start time"
+              value={data.muay_thai_preferred_time}
+              onChange={v => set("muay_thai_preferred_time", v)}
+              hint="e.g. the 7:00 AM class"
+            />
           )}
         </div>
 
@@ -896,13 +1032,35 @@ function Step4({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
 
 // ─── Step 5 — Capacity ────────────────────────────────────────────────────────
 
-function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
+function CommitmentForm({ onAdd, savedLocations }: {
+  onAdd: (c: FixedCommitment) => void;
+  savedLocations?: UserLocation[];
+}) {
   const [title,     setTitle]     = useState("");
   const [startTime, setStartTime] = useState("09:00");
   const [endTime,   setEndTime]   = useState("10:00");
   const [days,      setDays]      = useState<string[]>([]);
   const [recurring, setRecurring] = useState(true);
   const [dateStr,   setDateStr]   = useState("");
+  const [hasCommute,   setHasCommute]   = useState(false);
+  const [commuteMins,  setCommuteMins]  = useState(30);
+  const [locationName, setLocationName] = useState("");
+
+  // Auto-match: typing "Panera shift" fills in the saved Panera commute
+  useEffect(() => {
+    if (!savedLocations || savedLocations.length === 0) return;
+    const t = title.toLowerCase();
+    if (!t.trim()) return;
+    for (const loc of savedLocations) {
+      const name = loc.name.toLowerCase().trim();
+      if (name && t.includes(name)) {
+        setHasCommute(true);
+        setCommuteMins(loc.commute_minutes);
+        setLocationName(loc.name);
+        return;
+      }
+    }
+  }, [title, savedLocations]);
 
   const durationMins = (() => {
     const [sh, sm] = startTime.split(":").map(Number);
@@ -916,6 +1074,7 @@ function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
 
   const handleAdd = () => {
     if (!canAdd) return;
+    const commute = hasCommute ? commuteMins : 0;
     onAdd({
       id: `${Date.now()}-${Math.random()}`,
       title: title.trim(),
@@ -924,8 +1083,15 @@ function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
       days: recurring ? days : [],
       date: recurring ? undefined : dateStr,
       recurring,
+      commute_minutes: commute,
+      location: hasCommute && locationName.trim() ? locationName.trim() : null,
     });
+    // Remember the job/location so next time the commute fills itself in
+    if (hasCommute && commute > 0 && locationName.trim()) {
+      saveLocation({ name: locationName.trim(), commute_minutes: commute }).catch(() => {});
+    }
     setTitle(""); setStartTime("09:00"); setEndTime("10:00"); setDays([]); setDateStr("");
+    setHasCommute(false); setCommuteMins(30); setLocationName("");
   };
 
   return (
@@ -985,6 +1151,57 @@ function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
         <p className="text-[12px] text-indigo-600 font-medium">{fmtDuration(durationMins)}</p>
       )}
 
+      {/* Travel — per-job commute, remembered by location name */}
+      <div className="border-t border-gray-100 pt-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-[15px]">🚗</span>
+            <p className="text-[14px] font-medium text-gray-700">Does this require travel?</p>
+          </div>
+          <Toggle checked={hasCommute} onChange={setHasCommute} />
+        </div>
+        {hasCommute && (
+          <div className="mt-3 fade-in space-y-3">
+            {savedLocations && savedLocations.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-1.5">Saved places</p>
+                <div className="flex flex-wrap gap-2">
+                  {savedLocations.map(loc => (
+                    <button
+                      key={loc.id}
+                      type="button"
+                      onClick={() => { setCommuteMins(loc.commute_minutes); setLocationName(loc.name); }}
+                      className={`px-3 py-1.5 rounded-full text-[12px] font-medium border transition-all ${
+                        locationName === loc.name
+                          ? "bg-indigo-600 text-white border-indigo-600"
+                          : "bg-white text-gray-600 border-gray-200 hover:border-indigo-400"
+                      }`}
+                    >
+                      {loc.name} · {loc.commute_minutes}m
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="bg-white rounded-xl border border-gray-100">
+              <Stepper label="Commute each way" value={commuteMins} onChange={setCommuteMins} min={5} max={180} step={5} />
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-1.5">
+                Place name <span className="normal-case font-normal">(saved for next time)</span>
+              </p>
+              <input
+                type="text"
+                placeholder="e.g. Panera, Marianos"
+                value={locationName}
+                onChange={e => setLocationName(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-[13px] text-gray-900 bg-white focus:outline-none focus:border-indigo-300"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
       <button type="button" onClick={handleAdd} disabled={!canAdd}
         className="w-full py-3 rounded-xl text-[14px] font-semibold bg-indigo-600 text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors">
         Add commitment
@@ -993,7 +1210,11 @@ function CommitmentForm({ onAdd }: { onAdd: (c: FixedCommitment) => void }) {
   );
 }
 
-function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void }) {
+function Step5({ data, set, savedLocations }: {
+  data: WizardData;
+  set: <K extends keyof WizardData>(k: K, v: WizardData[K]) => void;
+  savedLocations?: UserLocation[];
+}) {
   const [showForm, setShowForm] = useState(false);
   const capacityPct = Math.min(100, (data.weekly_task_capacity_hours / 60) * 100);
 
@@ -1051,6 +1272,7 @@ function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
                       {fmt12(c.start_time)}–{fmt12(c.end_time)}
                       {c.recurring && c.days.length > 0 && ` · ${c.days.map(d => d.slice(0, 3)).join(", ")}`}
                       {!c.recurring && c.date && ` · ${c.date}`}
+                      {(c.commute_minutes ?? 0) > 0 && ` · 🚗 ${c.commute_minutes}m each way`}
                     </span>
                   </div>
                   <button type="button"
@@ -1065,7 +1287,7 @@ function Step5({ data, set }: { data: WizardData; set: <K extends keyof WizardDa
           )}
           {showForm && (
             <div className="fade-in">
-              <CommitmentForm onAdd={c => { set("fixed_commitments", [...data.fixed_commitments, c]); setShowForm(false); }} />
+              <CommitmentForm savedLocations={savedLocations} onAdd={c => { set("fixed_commitments", [...data.fixed_commitments, c]); setShowForm(false); }} />
               <button type="button" onClick={() => setShowForm(false)}
                 className="mt-3 text-[13px] text-gray-400 hover:text-gray-600 transition-colors">Cancel</button>
             </div>
@@ -1608,16 +1830,38 @@ function AIQuickPrefs({ data, set }: {
             <Stepper label="Commute each way" value={data.gym_commute_minutes} onChange={v => set("gym_commute_minutes", v)} min={0} max={120} step={5} />
           </div>
         )}
+        {data.gym_days_per_week > 0 && (
+          <>
+            <PreferredTimeRow
+              label="Gym start time"
+              value={data.gym_preferred_time}
+              onChange={v => set("gym_preferred_time", v)}
+            />
+            <GymSplitEditor
+              count={data.gym_days_per_week}
+              labels={data.gym_split_labels}
+              onChange={labels => set("gym_split_labels", labels)}
+            />
+          </>
+        )}
       </div>
 
       {/* Muay Thai sessions */}
       <div>
-        <p className="text-[14px] font-medium text-gray-700 mb-2">How many Muay Thai sessions this week?</p>
+        <p className="text-[14px] font-medium text-gray-700 mb-2">How many times a week do you want to do Muay Thai?</p>
         <NumberChips options={[0,1,2,3,4,5,6,7]} value={data.muay_thai_days_per_week} onChange={v => set("muay_thai_days_per_week", v)} />
         {data.muay_thai_days_per_week > 0 && (
           <div className="mt-3 bg-white rounded-xl border border-gray-100">
             <Stepper label="Commute each way" value={data.muay_thai_commute_minutes} onChange={v => set("muay_thai_commute_minutes", v)} min={0} max={120} step={5} />
           </div>
+        )}
+        {data.muay_thai_days_per_week > 0 && (
+          <PreferredTimeRow
+            label="Muay Thai start time"
+            value={data.muay_thai_preferred_time}
+            onChange={v => set("muay_thai_preferred_time", v)}
+            hint="e.g. the 7:00 AM class"
+          />
         )}
       </div>
 
@@ -2125,6 +2369,21 @@ export default function SetupPage() {
       setWeekTarget("next");
     }
 
+    // Check for a saved draft synchronously so the prefill below knows about it
+    let hasDraft = false;
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const parsed: DraftState = JSON.parse(raw);
+        if (parsed.mode && parsed.data && parsed.step) {
+          setDraft(parsed);
+          hasDraft = true;
+        }
+      }
+    } catch {
+      // ignore corrupt storage
+    }
+
     // Load last-week prefs and tasks in parallel (non-blocking)
     Promise.all([
       getLatestPreferences().catch(() => null),
@@ -2134,27 +2393,21 @@ export default function SetupPage() {
       if (prefs) setLastWeekPrefs(prefs);
       if (tasks) setLastWeekTasks(tasks);
       if (locs) setSavedLocations(locs as UserLocation[]);
+      // Pre-fill every wizard field from the last saved week so preferences
+      // "already know" the user. A resumed draft takes priority.
+      if (prefs && !hasDraft) {
+        setData(prev => ({ ...prev, ...prefsToWizardData(prefs) }));
+        setPreFilledFromLastWeek(true);
+      }
     });
 
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (raw) {
-        const parsed: DraftState = JSON.parse(raw);
-        if (parsed.mode && parsed.data && parsed.step) {
-          setDraft(parsed);
-          setDraftChecked(true);
-          return; // draft takes priority over step query param
-        }
-      }
-    } catch {
-      // ignore corrupt storage
-    }
-
     // No draft — check ?step= query param
-    const stepParam = params.get("step");
-    if (stepParam === "1") {
-      setMode("manual");
-      setStep(1);
+    if (!hasDraft) {
+      const stepParam = params.get("step");
+      if (stepParam === "1") {
+        setMode("manual");
+        setStep(1);
+      }
     }
 
     setDraftChecked(true);
@@ -2208,6 +2461,14 @@ export default function SetupPage() {
     setDirection(1);
   }
 
+  function handleStartFresh() {
+    setData(DEFAULTS);
+    setPreFilledFromLastWeek(false);
+    setMode("manual");
+    setStep(1);
+    setDirection(1);
+  }
+
   function handleUseLastWeekAsTemplate() {
     if (!lastWeekPrefs) return;
     const prefill = prefsToWizardData(lastWeekPrefs);
@@ -2217,7 +2478,7 @@ export default function SetupPage() {
     setData(prev => ({ ...prev, ...prefill, tasks }));
     setPreFilledFromLastWeek(true);
     setMode("manual");
-    setStep(5);
+    setStep(6);
     setDirection(1);
   }
 
@@ -2261,8 +2522,8 @@ export default function SetupPage() {
   }
 
   // Step routing
-  const TOTAL        = mode === "ai" ? 2 : 6;
-  const tasksStepNum = mode === "ai" ? 1 : 5;
+  const TOTAL        = mode === "ai" ? 2 : 7;
+  const tasksStepNum = mode === "ai" ? 1 : 6;
   const isLastStep   = step === TOTAL;
   const canContinue  = step !== tasksStepNum || data.tasks.length > 0;
 
@@ -2300,8 +2561,9 @@ export default function SetupPage() {
       if (step === 2) return <Step2 {...props} />;
       if (step === 3) return <Step3 {...props} />;
       if (step === 4) return <Step4 {...props} />;
-      if (step === 5) return <TasksStep {...tasksStepProps} />;
-      if (step === 6) return <ReviewStep data={data} set={set} mode={mode} weekTarget={weekTarget} />;
+      if (step === 5) return <Step5 {...props} savedLocations={savedLocations} />;
+      if (step === 6) return <TasksStep {...tasksStepProps} />;
+      if (step === 7) return <ReviewStep data={data} set={set} mode={mode} weekTarget={weekTarget} />;
     }
     if (mode === "ai") {
       if (step === 1) return <TasksStep {...tasksStepProps} />;
@@ -2309,10 +2571,6 @@ export default function SetupPage() {
     }
     return null;
   }
-
-  const BREAKFAST_TIMES: Record<MealTiming, string> = { Early: "06:30", Normal: "07:30", Late: "09:00" };
-  const LUNCH_TIMES:     Record<MealTiming, string> = { Early: "11:30", Normal: "12:30", Late: "14:00" };
-  const DINNER_TIMES:    Record<MealTiming, string> = { Early: "17:30", Normal: "19:00", Late: "20:30" };
 
   async function runGenerate(genData: WizardData, genMode: Mode) {
     const generationTimestamp = new Date().toISOString();
@@ -2343,6 +2601,11 @@ export default function SetupPage() {
       muay_thai_duration_mins: genData.muay_thai_duration_mins,
       muay_thai_commute_minutes: genData.muay_thai_commute_minutes,
       workout_time_preference: genData.workout_time_preference,
+      gym_preferred_time: genData.gym_preferred_time || null,
+      muay_thai_preferred_time: genData.muay_thai_preferred_time || null,
+      gym_split_labels: genData.gym_days_per_week > 0
+        ? genData.gym_split_labels.slice(0, genData.gym_days_per_week).map(l => l.trim()).filter(Boolean)
+        : null,
       commute_minutes: genMode === "ai"
         ? (genData.ai_has_commute ? genData.ai_commute_mins : 0)
         : (genData.is_remote ? 0 : genData.commute_minutes),
@@ -2476,6 +2739,7 @@ export default function SetupPage() {
             lastWeekTasks={lastWeekTasks}
             onUseLastWeekAsTemplate={handleUseLastWeekAsTemplate}
             onSameAsLastWeek={handleSameAsLastWeek}
+            onStartFresh={handleStartFresh}
           />
         ) : (
           <div key={`${mode}-${step}`} className={`w-full ${animClass}`}>

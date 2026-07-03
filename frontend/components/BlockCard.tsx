@@ -2,7 +2,7 @@
 
 import {
   Moon, Utensils, Dumbbell, Car, Sunrise,
-  Briefcase, Flame, CheckCircle2, Zap,
+  Briefcase, Flame, CheckCircle2, Zap, Droplets,
   ChevronRight, ChevronDown,
 } from "lucide-react";
 import { ScheduleBlock } from "@/lib/api";
@@ -26,6 +26,8 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   task:       { color: "#3b82f6", label: "Task",       Icon: Briefcase },
   event:      { color: "#0891b2", label: "Event",      Icon: Briefcase },
   deep_work:  { color: "#2563eb", label: "Deep Work",  Icon: Zap       },
+  commitment: { color: "#0891b2", label: "Commitment", Icon: Briefcase },
+  shower:     { color: "#0ea5e9", label: "Shower",     Icon: Droplets  },
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -94,7 +96,7 @@ function getActions(bt: string, isTask: boolean): ActionDef[] {
   if (bt === "sleep") return [
     { id: "done", label: "Done",     icon: "✓", style: "green" },
   ];
-  if (bt === "meal" || bt === "routine") return [
+  if (bt === "meal" || bt === "routine" || bt === "shower") return [
     { id: "done", label: "Done",    icon: "✓", style: "green" },
     { id: "skip", label: "Skipped", icon: "✗", style: "red"   },
   ];

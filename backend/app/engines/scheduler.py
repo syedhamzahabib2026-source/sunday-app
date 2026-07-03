@@ -239,14 +239,22 @@ def _parse_fixed_commitments(raw: Optional[str]) -> List[Dict]:
         date_str  = obj.get("date") or None
         recurring = bool(obj.get("recurring", True))
 
+        # Per-commitment one-way commute (e.g. a job with a known travel time)
+        try:
+            commute_mins = int(obj.get("commute_minutes") or 0)
+        except (TypeError, ValueError):
+            commute_mins = 0
+
         if title and start_time and end_time:
             result.append({
-                "title":      title,
-                "start_time": start_time,
-                "end_time":   end_time,
-                "days":       days,
-                "date":       date_str,
-                "recurring":  recurring,
+                "title":           title,
+                "start_time":      start_time,
+                "end_time":        end_time,
+                "days":            days,
+                "date":            date_str,
+                "recurring":       recurring,
+                "commute_minutes": max(0, commute_mins),
+                "location":        obj.get("location") or None,
             })
     return result
 
@@ -327,6 +335,28 @@ def generate_weekly_schedule(
     # Per-activity commute (one-way minutes)
     gym_commute_mins = int(p("gym_commute_minutes",        15) or 0)
     mt_commute_mins  = int(p("muay_thai_commute_minutes",  60) or 0)
+
+    # Per-activity preferred start time ("HH:MM") — None means no specific time
+    gym_preferred_time = p("gym_preferred_time", None)
+    mt_preferred_time  = p("muay_thai_preferred_time", None)
+
+    # Generic time-of-day fallback when no specific time is set
+    workout_time_pref = p("workout_time_preference", "morning") or "morning"
+
+    # Shower preferences — showers are placed after workouts and per daily preference
+    shower_mins       = int(p("shower_mins", 15) or 0)
+    shower_preference = p("shower_preference", "morning") or "morning"
+
+    # Gym split labels — rotated across the week's sessions (e.g. Leg/Chest/Shoulder/Back)
+    _split_raw = p("gym_split_labels", None)
+    gym_split_labels: List[str] = []
+    if _split_raw:
+        try:
+            _parsed_labels = json.loads(_split_raw) if isinstance(_split_raw, str) else _split_raw
+            if isinstance(_parsed_labels, list):
+                gym_split_labels = [str(x) for x in _parsed_labels if str(x).strip()]
+        except Exception:
+            gym_split_labels = []
 
     # Meal types — which meals the user actually eats this week
     _meal_types_raw = p("meal_types", None)
@@ -475,6 +505,8 @@ def generate_weekly_schedule(
         if not fc_day_indices:
             continue
 
+        fc_c = slots_needed(fc.get("commute_minutes", 0)) if fc.get("commute_minutes") else 0
+
         for d_idx in fc_day_indices:
             d_date = week_start_date + timedelta(days=d_idx)
             if d_date < schedule_start_date:
@@ -484,6 +516,10 @@ def generate_weekly_schedule(
                 continue
             if fc_s >= wake_slot:
                 mark_occupied(time_map, d_idx, fc_s, fc_n)
+                # Reserve travel time around the commitment (clamped to the day)
+                if fc_c > 0:
+                    mark_occupied(time_map, d_idx, max(0, fc_s - fc_c), min(fc_c, fc_s))
+                    mark_occupied(time_map, d_idx, fc_s + fc_n, fc_c)
 
         _commitment_placements.append((fc, fc_s, fc_n, fc_day_indices))
 
@@ -615,8 +651,18 @@ def generate_weekly_schedule(
             meal_plan = [("Breakfast", breakfast_slot), ("Dinner", dinner_slot)]
 
         for meal_name, target in meal_plan:
+            # Near the target first (within 2h), then shortly before it (a shift
+            # covering the target shouldn't push lunch to 9pm), then anywhere after.
             ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
-                                start_from=target, end_before=night_routine_start)
+                                start_from=target,
+                                end_before=min(target + 4 + MEAL_DURATION_SLOTS, night_routine_start))
+            if ms is None:
+                ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
+                                    start_from=max(after_morning, target - 4),
+                                    end_before=min(target, night_routine_start))
+            if ms is None:
+                ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
+                                    start_from=target, end_before=night_routine_start)
             if ms is None:   # fallback: first available waking slot
                 ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
                                     start_from=after_morning, end_before=night_routine_start)
@@ -628,6 +674,7 @@ def generate_weekly_schedule(
 
     # ── 3b.5: Fixed commitment blocks (LOCKED — placed before gym/tasks) ────────
     for fc, fc_s, fc_n, fc_day_indices in _commitment_placements:
+        fc_c = slots_needed(fc.get("commute_minutes", 0)) if fc.get("commute_minutes") else 0
         for d_idx in fc_day_indices:
             d_date = week_start_date + timedelta(days=d_idx)
             if d_date < schedule_start_date:
@@ -638,14 +685,54 @@ def generate_weekly_schedule(
             # Skip if entirely outside waking hours
             if fc_s < wake_slot or (fc_s + fc_n) > bed_slot:
                 continue
+            # Travel there — allowed to start before wake (early shifts are real life)
+            if fc_c > 0 and fc_s - fc_c >= 0:
+                blocks.append(_block(
+                    user_id, d_date, "commute", f"Commute to {fc['title']}",
+                    fc_s - fc_c, fc_c, is_locked=True,
+                ))
             blocks.append(_block(
                 user_id, d_date, "commitment", fc["title"],
                 fc_s, fc_n, is_locked=True,
             ))
-            logger.info(f"Placed commitment '{fc['title']}' on day {d_idx} slots {fc_s}-{fc_s+fc_n}")
+            # Travel back
+            if fc_c > 0 and fc_s + fc_n + fc_c <= SLOTS_PER_DAY:
+                blocks.append(_block(
+                    user_id, d_date, "commute", f"Commute from {fc['title']}",
+                    fc_s + fc_n, fc_c, is_locked=True,
+                ))
+            logger.info(f"Placed commitment '{fc['title']}' on day {d_idx} slots {fc_s}-{fc_s+fc_n} (commute {fc_c} slots)")
 
     # ── 3e/3f: Gym and Muay Thai — LOCKED, placed before flexible tasks ──────────
     AFTERNOON_START = 26   # 13:00
+    EVENING_START   = 34   # 17:00
+
+    # Post-workout showers are placed right after each session's return commute.
+    shower_slots = slots_needed(shower_mins) if shower_mins else 0
+    workout_shower_days: set = set()   # day indices that already got a post-workout shower
+
+    # Fallback search window from the generic time-of-day preference
+    _tod_start = {
+        "morning":   wake_slot + routine_slots,
+        "afternoon": AFTERNOON_START,
+        "evening":   EVENING_START,
+    }.get(workout_time_pref, AFTERNOON_START)
+
+    def _find_near_preferred(
+        day_idx: int, want_start: int, total_slots: int, cutoff: int
+    ) -> Optional[int]:
+        """Free start slot closest to want_start (scanning outward both ways)."""
+        lo = max(wake_slot, cutoff)
+        hi = night_routine_start - total_slots
+        if lo > hi:
+            return None
+        for delta in range(SLOTS_PER_DAY):
+            for cand in ((want_start,) if delta == 0 else (want_start - delta, want_start + delta)):
+                if lo <= cand <= hi and all(
+                    not time_map[day_idx][s] for s in range(cand, cand + total_slots)
+                ):
+                    return cand
+        return None
 
     def _place_workout(
         day_pref_order: List[int],
@@ -657,34 +744,61 @@ def generate_weekly_schedule(
         title: str,
         commute_to_label: str,
         commute_from_label: str,
+        preferred_time: Optional[str] = None,
+        session_labels: Optional[List[str]] = None,
     ) -> int:
         assigned = 0
         for day_idx in day_pref_order:
             if assigned >= target_count:
                 break
             day_date = week_start_date + timedelta(days=day_idx)
+            if day_date < schedule_start_date:
+                continue
             cutoff = schedule_start_slot if day_date == schedule_start_date else 0
-            start = find_free_slot(time_map, day_idx, total_slots,
-                                   start_from=max(AFTERNOON_START, cutoff),
-                                   end_before=night_routine_start)
+
+            # Include the shower in the reserved window so it never gets squeezed out
+            reserve_slots = total_slots + shower_slots
+
+            start = None
+            if preferred_time:
+                try:
+                    # Aim so the SESSION (not the commute) lands on the preferred time
+                    want = time_to_slot(preferred_time) - commute_n
+                    start = _find_near_preferred(day_idx, want, reserve_slots, cutoff)
+                except Exception:
+                    start = None
             if start is None:
-                start = find_free_slot(time_map, day_idx, total_slots,
+                start = find_free_slot(time_map, day_idx, reserve_slots,
+                                       start_from=max(_tod_start, cutoff),
+                                       end_before=night_routine_start)
+            if start is None:
+                start = find_free_slot(time_map, day_idx, reserve_slots,
                                        start_from=max(wake_slot + routine_slots, cutoff),
                                        end_before=night_routine_start)
             if start is not None:
                 if commute_n > 0:
                     mark_occupied(time_map, day_idx, start, commute_n)
                     blocks.append(_block(user_id, day_date, "commute", commute_to_label,
-                                         start, commute_n))
+                                         start, commute_n, is_locked=True))
                 session_start = start + commute_n
+                session_title = title
+                if session_labels:
+                    session_title = f"{title} — {session_labels[assigned % len(session_labels)]}"
                 mark_occupied(time_map, day_idx, session_start, session_slots)
-                blocks.append(_block(user_id, day_date, block_type, title,
+                blocks.append(_block(user_id, day_date, block_type, session_title,
                                       session_start, session_slots, is_locked=True))
+                after_session = session_start + session_slots
                 if commute_n > 0:
-                    return_start = session_start + session_slots
-                    mark_occupied(time_map, day_idx, return_start, commute_n)
+                    mark_occupied(time_map, day_idx, after_session, commute_n)
                     blocks.append(_block(user_id, day_date, "commute", commute_from_label,
-                                         return_start, commute_n))
+                                         after_session, commute_n, is_locked=True))
+                    after_session += commute_n
+                # Post-workout shower — locked so reorganizes keep it glued to the workout
+                if shower_slots > 0 and after_session + shower_slots <= night_routine_start:
+                    mark_occupied(time_map, day_idx, after_session, shower_slots)
+                    blocks.append(_block(user_id, day_date, "shower", "Shower",
+                                         after_session, shower_slots, is_locked=True))
+                    workout_shower_days.add(day_idx)
                 assigned += 1
         return assigned
 
@@ -692,6 +806,8 @@ def generate_weekly_schedule(
         GYM_PREFERRED, gym_days_per_week,
         gym_total_slots, gym_slots, gym_commute_slots,
         "gym", "Gym", "Commute to Gym", "Return from Gym",
+        preferred_time=gym_preferred_time,
+        session_labels=gym_split_labels or None,
     )
     if gym_assigned < gym_days_per_week:
         logger.warning(f"Only placed {gym_assigned}/{gym_days_per_week} gym sessions — schedule too full")
@@ -700,9 +816,33 @@ def generate_weekly_schedule(
         MT_PREFERRED, muay_thai_days_per_week,
         mt_total_slots, mt_slots, mt_commute_slots,
         "muay_thai", "Muay Thai", "Commute to Muay Thai", "Return from Muay Thai",
+        preferred_time=mt_preferred_time,
     )
     if mt_assigned < muay_thai_days_per_week:
         logger.warning(f"Only placed {mt_assigned}/{muay_thai_days_per_week} Muay Thai sessions — schedule too full")
+
+    # ── 3f.5: Daily showers on non-workout days (per shower_preference) ─────────
+    if shower_slots > 0:
+        for day_idx in range(7):
+            if day_idx in workout_shower_days:
+                continue   # post-workout shower already covers this day
+            day_date = week_start_date + timedelta(days=day_idx)
+            if day_date < schedule_start_date:
+                continue
+            cutoff = schedule_start_slot if day_date == schedule_start_date else 0
+            targets: List[int] = []
+            if shower_preference in ("morning", "both"):
+                targets.append(wake_slot + routine_slots)
+            if shower_preference in ("night", "both"):
+                targets.append(time_to_slot("21:00"))
+            for target in targets:
+                ss = find_free_slot(time_map, day_idx, shower_slots,
+                                    start_from=max(target, cutoff),
+                                    end_before=night_routine_start)
+                if ss is not None:
+                    mark_occupied(time_map, day_idx, ss, shower_slots)
+                    blocks.append(_block(user_id, day_date, "shower", "Shower",
+                                         ss, shower_slots, is_locked=True))
 
     # ── 3g: Tasks — fixed tasks placed first (slots already pre-marked in step 2)
     unscheduled_tasks: List[Task] = []
@@ -768,7 +908,7 @@ def generate_weekly_schedule(
                 if before_start >= wake_slot and before_start + task_commute_n <= start_slot:
                     mark_occupied(time_map, day_idx, before_start, task_commute_n)
                     blocks.append(_block(user_id, day_date, "commute", "Commute",
-                                         before_start, task_commute_n))
+                                         before_start, task_commute_n, is_locked=True))
 
             # Task block (locked — reorganizer will not move it)
             blocks.append(_block(user_id, day_date, "task", task.title,
@@ -783,7 +923,7 @@ def generate_weekly_schedule(
                 if after_start + task_commute_n <= night_routine_start:
                     mark_occupied(time_map, day_idx, after_start, task_commute_n)
                     blocks.append(_block(user_id, day_date, "commute", "Return Commute",
-                                         after_start, task_commute_n))
+                                         after_start, task_commute_n, is_locked=True))
 
             placed = True
 

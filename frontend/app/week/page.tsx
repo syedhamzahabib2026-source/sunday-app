@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import DayColumn from "@/components/DayColumn";
 import BlockCard from "@/components/BlockCard";
+import QuickAddTask from "@/components/QuickAddTask";
 import {
   getWeekSchedule, getArchivedSchedules, getArchivedWeekBlocks,
   deleteArchivedSchedule, getTodaySchedule,
@@ -573,6 +574,17 @@ export default function WeekPage() {
         </div>
       )}
     </div>
+
+      {/* Quick add task — refreshes the visible week after placement */}
+      {!viewingNext && (
+        <QuickAddTask
+          onAdded={msg => {
+            showToast(msg);
+            getWeekSchedule(toLocalDateString(weekStart)).then(setBlocks).catch(() => {});
+          }}
+          onError={msg => showToast(msg, "error")}
+        />
+      )}
 
       {/* Toast notifications */}
       {toasts.length > 0 && (
