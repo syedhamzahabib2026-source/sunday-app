@@ -536,16 +536,29 @@ Base URL: `https://sunday-app-production-d774.up.railway.app/api/v1`
 
 ## Environment Variables Required
 
-### Backend (Railway)
+### API service `sunday-app` (Railway)
 | Variable | Required | Description |
 |---|---|---|
-| `DATABASE_URL` | Yes | PostgreSQL connection string (Railway auto-provides). `postgres://` is auto-fixed to `postgresql://` on startup. |
+| `DATABASE_URL` | Yes | Reference `${{Postgres.DATABASE_URL}}`. `postgres://` is auto-fixed to `postgresql://` on startup. |
+| `JWT_SECRET_KEY` | Yes | Reference `${{Postgres.JWT_SECRET_KEY}}` — single source shared with the bot so bot-minted tokens validate. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | Yes | Google OAuth sign-in + Calendar sync. |
+| `BACKEND_URL` / `FRONTEND_URL` | Yes | Used in OAuth redirects. |
+| `ALLOWED_ORIGINS` | Optional | Comma-separated additional CORS origins. `https://sunday-app.pages.dev` and `localhost:3000/3001` are always allowed hardcoded. |
+
+### Bot service `sunday-bot` (Railway — root dir `backend`, start `python run_bot.py`)
+| Variable | Required | Description |
+|---|---|---|
 | `SLACK_BOT_TOKEN` | Yes | `xoxb-...` from Slack app OAuth page |
 | `SLACK_SIGNING_SECRET` | Yes | From Slack app → Basic Information |
 | `SLACK_APP_TOKEN` | Yes | `xapp-...` from Slack app → Socket Mode (enables bot socket connection) |
 | `ANTHROPIC_API_KEY` | Yes | For Claude intent parsing and date/duration extraction |
-| `API_BASE_URL` | Yes (bot) | Full URL to FastAPI, e.g. `https://sunday-app-production-d774.up.railway.app/api/v1`. Bot defaults to `http://localhost:8080/api/v1` if unset. |
-| `ALLOWED_ORIGINS` | Optional | Comma-separated additional CORS origins. `https://sunday-app.pages.dev` and `localhost:3000/3001` are always allowed hardcoded. |
+| `API_BASE_URL` | Yes | Full URL to FastAPI, e.g. `https://sunday-app-production-d774.up.railway.app/api/v1`. Bot defaults to `http://localhost:8080/api/v1` if unset. |
+| `BOT_USER_ID` | Yes | The real user's `users.id` the bot acts as (production: `3`; the seed test user is `4`). |
+| `DATABASE_URL` | Yes | Reference `${{Postgres.DATABASE_URL}}`. |
+| `JWT_SECRET_KEY` | Yes | Reference `${{Postgres.JWT_SECRET_KEY}}` — must match the API service or every bot API call 401s. |
+| `PYTHONUNBUFFERED` | Yes | `1` — without it Python prints never reach Railway deploy logs. |
+
+**Slack app config** (api.slack.com → app `Sunday`): Socket Mode ON; bot events `app_mention`, `message.channels`, `message.im`, `message.groups` (private channels — added Jul 2026, requires app reinstall to take effect).
 
 ### Frontend (Cloudflare Pages)
 | Variable | Required | Description |
@@ -565,7 +578,10 @@ Base URL: `https://sunday-app-production-d774.up.railway.app/api/v1`
 6. FastAPI startup event fires `run_migrations()` automatically
 7. Service is live
 
-**Bot service** (`python run_bot.py`) is a second Railway service pointing at the same repo/root-dir. It restarts automatically on push.
+**Bot service** (`sunday-bot`, start command `python run_bot.py`) is a second Railway service pointing at the same repo with root dir `backend`. It rebuilds automatically on push. Note: `railway.toml` / `Procfile` do NOT create this service — it was created manually in the Railway dashboard (Jul 2026).
+
+### Backend tests
+From `backend/`: `python -m pytest tests/test_scheduler.py -q` — invariant suite for the weekly generator (no overlapping blocks, exact per-job commute minutes, MT at preferred time, split labels in calendar order, meals within ±2.5h of target or skipped, showers after workouts). Requires `pip install pytest` (not in requirements.txt to keep the deploy image lean).
 
 ### Frontend (Cloudflare Pages)
 1. Push to `main` branch on GitHub
