@@ -660,6 +660,36 @@ function ModeScreen({ onSelect, weekTarget, setWeekTarget, lastWeekPrefs, lastWe
 }) {
   return (
     <div className="w-full max-w-lg mx-auto fade-in">
+      {/* Week selector — rendered ABOVE the template card so the target week is
+          chosen before any one-click path can jump straight into the wizard */}
+      <div className="mb-8">
+        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3 text-center">
+          Which week are you planning?
+        </p>
+        <div className="flex bg-gray-100 rounded-full p-1 gap-1 max-w-xs mx-auto">
+          {(["current", "next"] as const).map(t => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setWeekTarget(t)}
+              className={`flex-1 py-2 rounded-full text-[14px] font-semibold transition-all ${
+                weekTarget === t
+                  ? "bg-white text-indigo-600 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {t === "current" ? "This week" : "Next week"}
+            </button>
+          ))}
+        </div>
+        {weekTarget === "next" && (
+          <div className="mt-3 flex items-center gap-2 justify-center text-[13px] text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5 max-w-xs mx-auto">
+            <span>✦</span>
+            <span>Goes live automatically on Sunday at midnight</span>
+          </div>
+        )}
+      </div>
+
       {/* Last week summary card */}
       {lastWeekPrefs && (
         <div className="mb-6 bg-indigo-50 border border-indigo-100 rounded-2xl p-5">
@@ -688,35 +718,6 @@ function ModeScreen({ onSelect, weekTarget, setWeekTarget, lastWeekPrefs, lastWe
           </div>
         </div>
       )}
-
-      {/* Week selector */}
-      <div className="mb-8">
-        <p className="text-[13px] font-semibold text-gray-400 uppercase tracking-widest mb-3 text-center">
-          Which week are you planning?
-        </p>
-        <div className="flex bg-gray-100 rounded-full p-1 gap-1 max-w-xs mx-auto">
-          {(["current", "next"] as const).map(t => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setWeekTarget(t)}
-              className={`flex-1 py-2 rounded-full text-[14px] font-semibold transition-all ${
-                weekTarget === t
-                  ? "bg-white text-indigo-600 shadow-sm"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              {t === "current" ? "This week" : "Next week"}
-            </button>
-          ))}
-        </div>
-        {weekTarget === "next" && (
-          <div className="mt-3 flex items-center gap-2 justify-center text-[13px] text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5 max-w-xs mx-auto">
-            <span>✦</span>
-            <span>Goes live automatically on Sunday at midnight</span>
-          </div>
-        )}
-      </div>
 
       <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-3 tracking-tight">
         How do you want to plan?
