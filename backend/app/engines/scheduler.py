@@ -285,15 +285,28 @@ def generate_weekly_schedule(
     """
 
     # ── Schedule-start window ─────────────────────────────────────────────────
+    # "Now" must be evaluated on the USER'S wall clock, not UTC — otherwise a
+    # Sunday-evening generation in Chicago lands after midnight UTC and the
+    # generator trims Monday's early blocks (observed: missing Monday sleep).
+    from zoneinfo import ZoneInfo
+    try:
+        from app.models.user import User as _User
+        _tz_name = db.query(_User.timezone).filter(_User.id == user_id).scalar() or "UTC"
+        _user_tz = ZoneInfo(_tz_name)
+    except Exception:
+        _user_tz = timezone.utc
+
     if generation_timestamp:
         try:
             ts_str = generation_timestamp.replace("Z", "+00:00")
             ts_aware = datetime.fromisoformat(ts_str)
-            ts = ts_aware.astimezone(timezone.utc).replace(tzinfo=None)
+            if ts_aware.tzinfo is None:
+                ts_aware = ts_aware.replace(tzinfo=_user_tz)
+            ts = ts_aware.astimezone(_user_tz).replace(tzinfo=None)
         except Exception:
-            ts = datetime.utcnow()
+            ts = datetime.now(_user_tz).replace(tzinfo=None)
     else:
-        ts = datetime.utcnow()
+        ts = datetime.now(_user_tz).replace(tzinfo=None)
 
     schedule_start_dt = ts + timedelta(hours=1)
     rem = schedule_start_dt.minute % 15
