@@ -28,8 +28,8 @@ MEAL_DURATION_SLOTS = 1     # 30 min each
 PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "optional": 4}
 
 # Preferred day indices (0=Mon … 6=Sun)
-GYM_PREFERRED = [0, 2, 4, 1, 3, 5, 6]   # Mon/Wed/Fri first
-MT_PREFERRED  = [1, 3, 0, 2, 4, 5, 6]   # Tue/Thu first
+GYM_PREFERRED = [0, 1, 3, 4, 2, 5, 6]   # Mon/Tue/Thu/Fri first (Wed rest)
+MT_PREFERRED  = [0, 2, 4, 1, 3, 5, 6]   # Mon/Wed/Fri first (classic class days)
 
 # Day-name → weekday index for fixed-time task placement
 DAY_NAME_TO_IDX = {
@@ -564,6 +564,16 @@ def generate_weekly_schedule(
     # ── Step 3: Insert blocks ─────────────────────────────────────────────────
     blocks: List[ScheduleBlock] = []
 
+    # Locked commitment windows (incl. travel) per day — the night routine must
+    # not be drawn on top of a late shift's return commute.
+    _locked_by_day: Dict[int, List[Tuple[int, int]]] = {}
+    for fc, fc_s, fc_n, fc_day_indices in _commitment_placements:
+        fc_c = slots_needed(fc.get("commute_minutes", 0)) if fc.get("commute_minutes") else 0
+        for d_idx in fc_day_indices:
+            _locked_by_day.setdefault(d_idx, []).append(
+                (max(0, fc_s - fc_c), min(SLOTS_PER_DAY, fc_s + fc_n + fc_c))
+            )
+
     # ── 3a/3b/3c/3d: Per-day fixed blocks (sleep, routine, commute, meals) ────
     for day_idx in range(7):
         day_date   = week_start_date + timedelta(days=day_idx)
@@ -592,8 +602,12 @@ def generate_weekly_schedule(
                                  wake_slot, routine_slots))
         routine_end = wake_slot + routine_slots
 
-        # Night routine — slot already pre-marked; just create the block
-        if _ok(night_routine_start):
+        # Night routine — slot already pre-marked; create the block unless a
+        # locked commitment (or its travel) runs through that window.
+        _nr_end = night_routine_start + night_routine_slots
+        _nr_clear = all(e <= night_routine_start or s >= _nr_end
+                        for s, e in _locked_by_day.get(day_idx, []))
+        if _ok(night_routine_start) and _nr_clear:
             blocks.append(_block(user_id, day_date, "routine", "Night Routine",
                                  night_routine_start, night_routine_slots))
 
@@ -651,21 +665,19 @@ def generate_weekly_schedule(
             meal_plan = [("Breakfast", breakfast_slot), ("Dinner", dinner_slot)]
 
         for meal_name, target in meal_plan:
-            # Near the target first (within 2h), then shortly before it (a shift
-            # covering the target shouldn't push lunch to 9pm), then anywhere after.
+            # Near the target first (within 2h after), then shortly before it (a
+            # shift covering the target shouldn't push lunch to 9pm). A meal that
+            # can't land within ~2.5h of its target is skipped entirely — the user
+            # eats at work; a 5:30 AM "dinner" block helps no one.
             ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
                                 start_from=target,
                                 end_before=min(target + 4 + MEAL_DURATION_SLOTS, night_routine_start))
             if ms is None:
                 ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
-                                    start_from=max(after_morning, target - 4),
+                                    start_from=max(after_morning, target - 5),
                                     end_before=min(target, night_routine_start))
             if ms is None:
-                ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
-                                    start_from=target, end_before=night_routine_start)
-            if ms is None:   # fallback: first available waking slot
-                ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
-                                    start_from=after_morning, end_before=night_routine_start)
+                logger.info(f"No slot near target for {meal_name} on day {day_idx} — skipping")
             if ms is not None:
                 mark_occupied(time_map, day_idx, ms, MEAL_DURATION_SLOTS)
                 if _ok(ms):
@@ -802,6 +814,17 @@ def generate_weekly_schedule(
                 assigned += 1
         return assigned
 
+    # Muay Thai first: classes run at a fixed clock time (e.g. the 7:00 AM class),
+    # so they must claim those slots before the (time-flexible) gym sessions do.
+    mt_assigned = _place_workout(
+        MT_PREFERRED, muay_thai_days_per_week,
+        mt_total_slots, mt_slots, mt_commute_slots,
+        "muay_thai", "Muay Thai", "Commute to Muay Thai", "Return from Muay Thai",
+        preferred_time=mt_preferred_time,
+    )
+    if mt_assigned < muay_thai_days_per_week:
+        logger.warning(f"Only placed {mt_assigned}/{muay_thai_days_per_week} Muay Thai sessions — schedule too full")
+
     gym_assigned = _place_workout(
         GYM_PREFERRED, gym_days_per_week,
         gym_total_slots, gym_slots, gym_commute_slots,
@@ -812,14 +835,14 @@ def generate_weekly_schedule(
     if gym_assigned < gym_days_per_week:
         logger.warning(f"Only placed {gym_assigned}/{gym_days_per_week} gym sessions — schedule too full")
 
-    mt_assigned = _place_workout(
-        MT_PREFERRED, muay_thai_days_per_week,
-        mt_total_slots, mt_slots, mt_commute_slots,
-        "muay_thai", "Muay Thai", "Commute to Muay Thai", "Return from Muay Thai",
-        preferred_time=mt_preferred_time,
-    )
-    if mt_assigned < muay_thai_days_per_week:
-        logger.warning(f"Only placed {mt_assigned}/{muay_thai_days_per_week} Muay Thai sessions — schedule too full")
+    # Re-assign split labels in calendar order: the user reads the week left to
+    # right, so "Chest, Back, Shoulder, Leg" must land on their gym days in that
+    # order, not in placement-preference order.
+    if gym_split_labels:
+        _gym_blocks = sorted((b for b in blocks if b.block_type == "gym"),
+                             key=lambda b: (b.date, b.start_time))
+        for _i, _gb in enumerate(_gym_blocks):
+            _gb.title = f"Gym — {gym_split_labels[_i % len(gym_split_labels)]}"
 
     # ── 3f.5: Daily showers on non-workout days (per shower_preference) ─────────
     if shower_slots > 0:
