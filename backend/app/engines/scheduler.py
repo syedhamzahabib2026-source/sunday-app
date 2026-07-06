@@ -46,6 +46,12 @@ def time_to_slot(time_str: str) -> int:
     return h * 2 + (1 if m >= 30 else 0)
 
 
+def mins_to_time(total_mins: int) -> str:
+    """Minutes-from-midnight → 'HH:MM' (24:00 wraps to '00:00')."""
+    m = max(0, min(total_mins, 24 * 60)) % (24 * 60)
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
 def slot_to_time(slot: int) -> str:
     """Slot index → 'HH:MM'. Slot 48 maps to '00:00' (midnight end-of-day)."""
     slot = min(slot, SLOTS_PER_DAY)
@@ -685,8 +691,11 @@ def generate_weekly_schedule(
                                          ms, MEAL_DURATION_SLOTS))
 
     # ── 3b.5: Fixed commitment blocks (LOCKED — placed before gym/tasks) ────────
+    # Commute blocks use the EXACT minutes the user entered (e.g. 75), not the
+    # 30-min-grid rounding. The time_map reservation (step 2) stays rounded up
+    # so nothing else can be scheduled into the leftover sliver.
     for fc, fc_s, fc_n, fc_day_indices in _commitment_placements:
-        fc_c = slots_needed(fc.get("commute_minutes", 0)) if fc.get("commute_minutes") else 0
+        fc_cm = int(fc.get("commute_minutes") or 0)
         for d_idx in fc_day_indices:
             d_date = week_start_date + timedelta(days=d_idx)
             if d_date < schedule_start_date:
@@ -697,23 +706,29 @@ def generate_weekly_schedule(
             # Skip if entirely outside waking hours
             if fc_s < wake_slot or (fc_s + fc_n) > bed_slot:
                 continue
-            # Travel there — allowed to start before wake (early shifts are real life)
-            if fc_c > 0 and fc_s - fc_c >= 0:
-                blocks.append(_block(
-                    user_id, d_date, "commute", f"Commute to {fc['title']}",
-                    fc_s - fc_c, fc_c, is_locked=True,
+            # Travel there — ends exactly at the shift start (may start before wake)
+            if fc_cm > 0 and fc_s * 30 - fc_cm >= 0:
+                blocks.append(ScheduleBlock(
+                    user_id=user_id, task_id=None, block_type="commute",
+                    title=f"Commute to {fc['title']}",
+                    start_time=mins_to_time(fc_s * 30 - fc_cm),
+                    end_time=slot_to_time(fc_s),
+                    date=d_date, is_locked=True, priority=None,
                 ))
             blocks.append(_block(
                 user_id, d_date, "commitment", fc["title"],
                 fc_s, fc_n, is_locked=True,
             ))
-            # Travel back
-            if fc_c > 0 and fc_s + fc_n + fc_c <= SLOTS_PER_DAY:
-                blocks.append(_block(
-                    user_id, d_date, "commute", f"Commute from {fc['title']}",
-                    fc_s + fc_n, fc_c, is_locked=True,
+            # Travel back — starts exactly at the shift end
+            if fc_cm > 0 and (fc_s + fc_n) * 30 + fc_cm <= 24 * 60:
+                blocks.append(ScheduleBlock(
+                    user_id=user_id, task_id=None, block_type="commute",
+                    title=f"Commute from {fc['title']}",
+                    start_time=slot_to_time(fc_s + fc_n),
+                    end_time=mins_to_time((fc_s + fc_n) * 30 + fc_cm),
+                    date=d_date, is_locked=True, priority=None,
                 ))
-            logger.info(f"Placed commitment '{fc['title']}' on day {d_idx} slots {fc_s}-{fc_s+fc_n} (commute {fc_c} slots)")
+            logger.info(f"Placed commitment '{fc['title']}' on day {d_idx} slots {fc_s}-{fc_s+fc_n} (commute {fc_cm} min exact)")
 
     # ── 3e/3f: Gym and Muay Thai — LOCKED, placed before flexible tasks ──────────
     AFTERNOON_START = 26   # 13:00
