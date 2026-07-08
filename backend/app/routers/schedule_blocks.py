@@ -169,13 +169,15 @@ def generate_schedule(
         background_tasks.add_task(push_blocks_to_calendar, current_user.id, block_ids)
 
     return {
-        "week_start":        str(result["week_start"]),
-        "block_count":       len(result["blocks"]),
-        "is_overloaded":     result["is_overloaded"],
+        "week_start":          str(result["week_start"]),
+        "block_count":         len(result["blocks"]),
+        "is_overloaded":       result["is_overloaded"],
         "unscheduled_tasks": [
             TaskResponse.model_validate(t).model_dump() for t in result["unscheduled_tasks"]
         ],
-        "blocks_by_day":     _group_by_day(result["blocks"]),
+        "dropped_items":       result.get("dropped_items", []),
+        "unscheduled_summary": result.get("unscheduled_summary", {}),
+        "blocks_by_day":       _group_by_day(result["blocks"]),
     }
 
 

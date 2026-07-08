@@ -137,11 +137,21 @@ export interface RescheduleResult {
   block_id?: number;
 }
 
+export interface UnscheduledSummary {
+  gym?:       { requested: number; placed: number };
+  muay_thai?: { requested: number; placed: number };
+  meals?:     { requested: number; placed: number };
+  tasks?:     { requested: number; placed: number };
+}
+
 export interface GenerateResult {
   week_start: string;
   block_count: number;
   is_overloaded: boolean;
   unscheduled_tasks: Task[];
+  // Human-readable lines for each thing that couldn't be placed (gym/MT/meals/tasks).
+  dropped_items: string[];
+  unscheduled_summary: UnscheduledSummary;
   blocks_by_day: Record<string, ScheduleBlock[]>;
 }
 

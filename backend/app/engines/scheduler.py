@@ -594,6 +594,10 @@ def generate_weekly_schedule(
             )
 
     # ── 3a/3b/3c/3d: Per-day fixed blocks (sleep, routine, commute, meals) ────
+    # Track requested vs actually-placed meals so an unfittable meal is surfaced
+    # in the response, not just logged. (Finding 1.1)
+    meals_requested = 0
+    meals_placed = 0
     for day_idx in range(7):
         day_date   = week_start_date + timedelta(days=day_idx)
         is_weekday = day_idx < 5  # Mon-Fri
@@ -695,13 +699,18 @@ def generate_weekly_schedule(
                 ms = find_free_slot(time_map, day_idx, MEAL_DURATION_SLOTS,
                                     start_from=max(after_morning, target - 5),
                                     end_before=min(target, night_routine_start))
-            if ms is None:
-                logger.info(f"No slot near target for {meal_name} on day {day_idx} — skipping")
             if ms is not None:
                 mark_occupied(time_map, day_idx, ms, MEAL_DURATION_SLOTS)
                 if _ok(ms):
                     blocks.append(_block(user_id, day_date, "meal", meal_name,
                                          ms, MEAL_DURATION_SLOTS))
+                    meals_placed += 1
+                    meals_requested += 1
+                # else: slot is before the current-day cutoff (past-time trim),
+                # not a capacity shortfall — don't count it either way.
+            else:
+                logger.info(f"No slot near target for {meal_name} on day {day_idx} — skipping")
+                meals_requested += 1
 
     # ── 3b.5: Fixed commitment blocks (LOCKED — placed before gym/tasks) ────────
     # Commute blocks use the EXACT minutes the user entered (e.g. 75), not the
@@ -1123,7 +1132,45 @@ def generate_weekly_schedule(
                 dw_day_count += 1
                 scan_from = ts + dw_slots
 
-    is_overloaded = bool(unscheduled_tasks)
+    # ── Finding 1.1: surface silently-dropped workouts/meals ─────────────────
+    # gym_assigned / mt_assigned are the counts actually placed above. A shortfall
+    # here (fewer placed than requested) previously only hit the logs; now it is
+    # carried in the response so the frontend can warn the user.
+    gym_short   = max(0, gym_days_per_week - gym_assigned)
+    mt_short    = max(0, muay_thai_days_per_week - mt_assigned)
+    meals_short = max(0, meals_requested - meals_placed)
+
+    def _plural(n: int, word: str) -> str:
+        return f"{word}" if n == 1 else f"{word}s"
+
+    dropped_items: List[str] = []
+    if gym_short:
+        dropped_items.append(
+            f"{gym_short} of {gym_days_per_week} gym {_plural(gym_days_per_week, 'session')} could not be placed"
+        )
+    if mt_short:
+        dropped_items.append(
+            f"{mt_short} of {muay_thai_days_per_week} Muay Thai {_plural(muay_thai_days_per_week, 'session')} could not be placed"
+        )
+    if meals_short:
+        dropped_items.append(
+            f"{meals_short} {_plural(meals_short, 'meal')} could not be placed"
+        )
+    if unscheduled_tasks:
+        n_task = len(unscheduled_tasks)
+        dropped_items.append(
+            f"{n_task} {_plural(n_task, 'task')} could not be placed"
+        )
+
+    unscheduled_summary: Dict[str, Dict[str, int]] = {
+        "gym":       {"requested": gym_days_per_week,       "placed": gym_assigned},
+        "muay_thai": {"requested": muay_thai_days_per_week, "placed": mt_assigned},
+        "meals":     {"requested": meals_requested,         "placed": meals_placed},
+        "tasks":     {"requested": len(tasks),              "placed": len(tasks) - len(unscheduled_tasks)},
+    }
+
+    # Overloaded now reflects dropped workouts/meals too, not just flexible tasks.
+    is_overloaded = bool(dropped_items)
 
     # ── Step 4: Save to database ──────────────────────────────────────────────
     week_end = week_start_date + timedelta(days=6)
@@ -1150,10 +1197,12 @@ def generate_weekly_schedule(
 
     # ── Step 5: Return result ─────────────────────────────────────────────────
     return {
-        "week_start":        week_start_date,
-        "blocks":            blocks,
-        "is_overloaded":     is_overloaded,
-        "unscheduled_tasks": unscheduled_tasks,
+        "week_start":          week_start_date,
+        "blocks":              blocks,
+        "is_overloaded":       is_overloaded,
+        "unscheduled_tasks":   unscheduled_tasks,
+        "dropped_items":       dropped_items,
+        "unscheduled_summary": unscheduled_summary,
     }
 
 

@@ -152,6 +152,8 @@ export default function TodayPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [overloaded, setOverloaded] = useState(false);
+  // Finding 3.3: detailed lines for gym/MT/meals/tasks that couldn't be placed this week
+  const [droppedItems, setDroppedItems] = useState<string[]>([]);
   const [showStickyBar, setShowStickyBar] = useState(false);
   // FIX 4: reactive nowMins — updated by interval so NowLine and current-block highlight stay accurate
   const [nowMins, setNowMins] = useState(() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); });
@@ -179,6 +181,14 @@ export default function TodayPage() {
       // FIX 7: restore overload banner from localStorage (set by setup wizard after generation)
       const monday = getWeekMondayStr(viewingDateStr);
       setOverloaded(localStorage.getItem(`sunday_overloaded_${monday}`) === "1");
+      // Finding 3.3: detailed drop lines persisted by the wizard after generation
+      try {
+        const raw = localStorage.getItem(`sunday_dropped_${monday}`);
+        const parsed = raw ? JSON.parse(raw) : [];
+        setDroppedItems(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setDroppedItems([]);
+      }
     } catch (e) {
       console.error("[Sunday] Failed to load schedule:", e);
       setError(String(e));
@@ -498,10 +508,33 @@ export default function TodayPage() {
             </div>
           </div>
 
-          {overloaded && (
-            <div className="mb-5 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-[13px] font-medium text-amber-700 flex items-center gap-2">
-              <span>⚠</span>
-              <span>Schedule overloaded — some tasks didn&apos;t fit this week.</span>
+          {(overloaded || droppedItems.length > 0) && (
+            <div className="mb-5 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
+              {droppedItems.length > 0 ? (
+                <>
+                  <p className="text-[13px] font-semibold text-amber-800 flex items-center gap-2 mb-1.5">
+                    <span>⚠</span>
+                    <span>Your week is too full — some things couldn&apos;t fit:</span>
+                  </p>
+                  <ul className="space-y-0.5 mb-1.5">
+                    {droppedItems.map((line, i) => (
+                      <li key={i} className="text-[13px] text-amber-700 flex items-start gap-2">
+                        <span className="mt-0.5">•</span>
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-[12px] text-amber-600">
+                    Consider reducing commitments or session counts in your{" "}
+                    <a href="/setup" className="underline font-medium">setup</a>.
+                  </p>
+                </>
+              ) : (
+                <p className="text-[13px] font-medium text-amber-700 flex items-center gap-2">
+                  <span>⚠</span>
+                  <span>Schedule overloaded — some tasks didn&apos;t fit this week.</span>
+                </p>
+              )}
             </div>
           )}
 

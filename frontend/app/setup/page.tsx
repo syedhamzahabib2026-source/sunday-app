@@ -2228,24 +2228,50 @@ function ReviewStep({ data, set, mode, weekTarget }: {
 
 // ─── DONE SCREEN ──────────────────────────────────────────────────────────────
 
-function DoneScreen({ weekTarget }: { weekTarget: "current" | "next" }) {
+function DoneScreen({ weekTarget, droppedItems = [] }: { weekTarget: "current" | "next"; droppedItems?: string[] }) {
   const router = useRouter();
   const isNext = weekTarget === "next";
+  const hasDrops = droppedItems.length > 0;
   return (
     <div className="w-full max-w-lg mx-auto text-center fade-in">
-      <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mx-auto mb-8">
-        <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-        </svg>
+      <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-8 ${hasDrops ? "bg-amber-50" : "bg-green-50"}`}>
+        {hasDrops ? (
+          <span className="text-3xl">⚠️</span>
+        ) : (
+          <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        )}
       </div>
       <h1 className="text-[2rem] font-semibold text-gray-900 leading-tight mb-4 tracking-tight">
         {isNext ? "Next week is locked in." : "Your schedule is ready."}
       </h1>
-      <p className="text-[16px] text-gray-500 mb-12 leading-relaxed">
+      <p className="text-[16px] text-gray-500 mb-8 leading-relaxed">
         {isNext
           ? "Goes live automatically on Sunday at 12:00 AM."
           : "Your week is built. View it now."}
       </p>
+
+      {/* Finding 3.3: visible warning when the week is too full to place everything */}
+      {hasDrops && (
+        <div className="mb-10 text-left rounded-2xl bg-amber-50 border border-amber-200 px-5 py-4">
+          <p className="text-[14px] font-semibold text-amber-800 mb-2 flex items-center gap-2">
+            <span>⚠️</span>
+            <span>Your week is too full — some things couldn&apos;t fit:</span>
+          </p>
+          <ul className="space-y-1 mb-2">
+            {droppedItems.map((line, i) => (
+              <li key={i} className="text-[13px] text-amber-700 flex items-start gap-2">
+                <span className="mt-0.5">•</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[12px] text-amber-600 leading-relaxed">
+            Consider reducing commitments or session counts in your setup, then regenerate.
+          </p>
+        </div>
+      )}
       <button
         type="button"
         onClick={() => router.push(isNext ? "/week?preview=next" : "/today")}
@@ -2358,6 +2384,9 @@ export default function SetupPage() {
 
   // One-tap generation
   const [generatingDirectly, setGeneratingDirectly] = useState(false);
+
+  // Finding 3.3: items the scheduler couldn't place (gym/MT/meals/tasks), shown on the Done screen
+  const [droppedItems, setDroppedItems] = useState<string[]>([]);
 
   // On mount: check for saved draft, then fall back to ?step= / ?week= query params
   // Also load last-week data and saved locations
@@ -2670,8 +2699,12 @@ export default function SetupPage() {
 
     // FIX 7: store is_overloaded in localStorage so today page can read it on load
     const genResult = await generateSchedule(weekStart, generationTimestamp, weekTarget);
+    const dropped = genResult.dropped_items ?? [];
+    setDroppedItems(dropped);
     try {
       localStorage.setItem(`sunday_overloaded_${weekStart}`, genResult.is_overloaded ? "1" : "0");
+      // Persist the detailed drop lines so the Today page can show them too (3.3)
+      localStorage.setItem(`sunday_dropped_${weekStart}`, JSON.stringify(dropped));
     } catch { /* ignore */ }
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
     return taskErrors;
@@ -2728,7 +2761,7 @@ export default function SetupPage() {
       {/* Content */}
       <div className="min-h-screen flex flex-col items-center px-6 pt-24 pb-32">
         {done ? (
-          <DoneScreen weekTarget={weekTarget} />
+          <DoneScreen weekTarget={weekTarget} droppedItems={droppedItems} />
         ) : draft !== null && draftChecked ? (
           <DraftPrompt draft={draft} onResume={resumeDraft} onDiscard={discardDraft} />
         ) : mode === null ? (

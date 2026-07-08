@@ -227,14 +227,16 @@ def generate_with_lifecycle(
         background_tasks.add_task(push_blocks_to_calendar, current_user.id, block_ids)
 
     return {
-        "week_start":        str(result["week_start"]),
-        "block_count":       len(result["blocks"]),
-        "is_overloaded":     result["is_overloaded"],
-        "schedule_status":   new_status,
+        "week_start":          str(result["week_start"]),
+        "block_count":         len(result["blocks"]),
+        "is_overloaded":       result["is_overloaded"],
+        "schedule_status":     new_status,
         "unscheduled_tasks": [
             TaskResponse.model_validate(t).model_dump()
             for t in result["unscheduled_tasks"]
         ],
+        "dropped_items":       result.get("dropped_items", []),
+        "unscheduled_summary": result.get("unscheduled_summary", {}),
     }
 
 
