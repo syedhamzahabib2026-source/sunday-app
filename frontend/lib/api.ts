@@ -135,6 +135,13 @@ export interface RescheduleResult {
   new_start_time?: string;
   new_end_time?: string;
   block_id?: number;
+  // Priority-cascade fields
+  needs_confirmation?: boolean;
+  message?: string;
+  bumped?: string[];
+  dropped?: string[];
+  drop_titles?: string[];
+  would_place?: { date: string; start_time: string } | null;
 }
 
 export interface UnscheduledSummary {
@@ -149,8 +156,10 @@ export interface GenerateResult {
   block_count: number;
   is_overloaded: boolean;
   unscheduled_tasks: Task[];
-  // Human-readable lines for each thing that couldn't be placed (gym/MT/meals/tasks).
+  // Human-readable lines for each thing that couldn't be placed (gym/MT/tasks + real meal drops).
   dropped_items: string[];
+  // Informational: meals skipped because a shift covers them ("eating at work"), NOT overload.
+  meals_at_work: string[];
   unscheduled_summary: UnscheduledSummary;
   blocks_by_day: Record<string, ScheduleBlock[]>;
 }
@@ -222,10 +231,18 @@ export function reorganize(reason = "manual"): Promise<ReorganizeResult> {
   });
 }
 
-export function reorganizeMissed(missedBlockId: number): Promise<RescheduleResult> {
+export function reorganizeMissed(
+  missedBlockId: number,
+  opts?: { confirmDrop?: boolean; dryRun?: boolean },
+): Promise<RescheduleResult> {
   return apiFetch("/schedule/reorganize", {
     method: "POST",
-    body: JSON.stringify({ missed_block_id: missedBlockId, reason: "missed" }),
+    body: JSON.stringify({
+      missed_block_id: missedBlockId,
+      reason: "missed",
+      ...(opts?.confirmDrop ? { confirm_drop: true } : {}),
+      ...(opts?.dryRun ? { dry_run: true } : {}),
+    }),
   });
 }
 

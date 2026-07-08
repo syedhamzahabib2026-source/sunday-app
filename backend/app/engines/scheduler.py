@@ -586,18 +586,26 @@ def generate_weekly_schedule(
     # Locked commitment windows (incl. travel) per day — the night routine must
     # not be drawn on top of a late shift's return commute.
     _locked_by_day: Dict[int, List[Tuple[int, int]]] = {}
+    # Commitment core windows (WITHOUT travel) keyed by day, with the commitment
+    # title — used to tell "eating at work" (a shift covers a meal's target time)
+    # apart from a genuine can't-fit drop. (Item 1)
+    _commitments_by_day: Dict[int, List[Tuple[int, int, str]]] = {}
     for fc, fc_s, fc_n, fc_day_indices in _commitment_placements:
         fc_c = slots_needed(fc.get("commute_minutes", 0)) if fc.get("commute_minutes") else 0
+        _title = fc.get("title") or "a commitment"
         for d_idx in fc_day_indices:
             _locked_by_day.setdefault(d_idx, []).append(
                 (max(0, fc_s - fc_c), min(SLOTS_PER_DAY, fc_s + fc_n + fc_c))
             )
+            _commitments_by_day.setdefault(d_idx, []).append((fc_s, fc_s + fc_n, _title))
 
     # ── 3a/3b/3c/3d: Per-day fixed blocks (sleep, routine, commute, meals) ────
     # Track requested vs actually-placed meals so an unfittable meal is surfaced
     # in the response, not just logged. (Finding 1.1)
     meals_requested = 0
     meals_placed = 0
+    meals_dropped_real = 0                        # genuine can't-fit meals (overload)
+    meals_at_work_raw: List[Tuple[str, str]] = [] # (meal_name, shift title) — informational
     for day_idx in range(7):
         day_date   = week_start_date + timedelta(days=day_idx)
         is_weekday = day_idx < 5  # Mon-Fri
@@ -711,6 +719,17 @@ def generate_weekly_schedule(
             else:
                 logger.info(f"No slot near target for {meal_name} on day {day_idx} — skipping")
                 meals_requested += 1
+                # Item 1: if a locked commitment (shift) covers the meal's target time,
+                # the user is eating at work — informational, NOT a capacity overload.
+                _shift = next(
+                    (title for cs, ce, title in _commitments_by_day.get(day_idx, [])
+                     if cs <= target < ce),
+                    None,
+                )
+                if _shift:
+                    meals_at_work_raw.append((meal_name, _shift))
+                else:
+                    meals_dropped_real += 1
 
     # ── 3b.5: Fixed commitment blocks (LOCKED — placed before gym/tasks) ────────
     # Commute blocks use the EXACT minutes the user entered (e.g. 75), not the
@@ -1138,7 +1157,8 @@ def generate_weekly_schedule(
     # carried in the response so the frontend can warn the user.
     gym_short   = max(0, gym_days_per_week - gym_assigned)
     mt_short    = max(0, muay_thai_days_per_week - mt_assigned)
-    meals_short = max(0, meals_requested - meals_placed)
+    # Item 1: only meals with no shift covering their target count as real drops.
+    meals_short = meals_dropped_real
 
     def _plural(n: int, word: str) -> str:
         return f"{word}" if n == 1 else f"{word}s"
@@ -1156,6 +1176,13 @@ def generate_weekly_schedule(
         dropped_items.append(
             f"{meals_short} {_plural(meals_short, 'meal')} could not be placed"
         )
+
+    # Informational: meals skipped because a shift covers their time (not overload).
+    # Deduped across days, e.g. "Dinner: eating at work (Marianos)".
+    meals_at_work: List[str] = sorted({
+        f"{meal}: eating at work ({title})" for meal, title in meals_at_work_raw
+    })
+
     if unscheduled_tasks:
         n_task = len(unscheduled_tasks)
         dropped_items.append(
@@ -1165,7 +1192,8 @@ def generate_weekly_schedule(
     unscheduled_summary: Dict[str, Dict[str, int]] = {
         "gym":       {"requested": gym_days_per_week,       "placed": gym_assigned},
         "muay_thai": {"requested": muay_thai_days_per_week, "placed": mt_assigned},
-        "meals":     {"requested": meals_requested,         "placed": meals_placed},
+        "meals":     {"requested": meals_requested,         "placed": meals_placed,
+                      "at_work": len(meals_at_work_raw)},
         "tasks":     {"requested": len(tasks),              "placed": len(tasks) - len(unscheduled_tasks)},
     }
 
@@ -1202,82 +1230,121 @@ def generate_weekly_schedule(
         "is_overloaded":       is_overloaded,
         "unscheduled_tasks":   unscheduled_tasks,
         "dropped_items":       dropped_items,
+        "meals_at_work":       meals_at_work,
         "unscheduled_summary": unscheduled_summary,
     }
 
 
 # ── Missed-task rescheduler ───────────────────────────────────────────────────
 
+def _parse_deadline_date(raw) -> Optional[date]:
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, str):
+            return date.fromisoformat(raw[:10])
+        if hasattr(raw, "date"):
+            return raw.date()
+        return date.fromisoformat(str(raw)[:10])
+    except Exception:
+        return None
+
+
+def _and_join(items: List[str]) -> str:
+    items = [f'"{i}"' for i in items]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
 def reorganize_missed_task(
     user_id: int,
     missed_block_id: int,
     db: Session,
+    *,
+    dry_run: bool = False,
+    confirm_drop: bool = False,
 ) -> Dict[str, Any]:
     """
-    Full priority-aware rescheduler. Scores all candidate slots and picks best.
-    Priority rules:
-      optional  → always dropped
-      low       → only reschedule if slot available today/tomorrow
-      medium    → reschedule within week, same time-of-day preferred
-      high      → ASAP, any slot
-      critical  → ASAP, flag as needs_attention if no slot found
+    Priority-cascade rescheduler for a single missed/bumped task.
+
+    Order of operations:
+      1. Try an empty slot for the task (respecting its deadline).
+      2. If none, bump the LOWEST strictly-lower-priority movable task out of
+         its slot, place the task there, then re-home the bumped task (cascade
+         down high → medium → low). Locked/past/non-task blocks never move.
+      3. If the cascade bottoms out with a task that has nowhere to go, that
+         task is a *drop candidate*: nothing is written and needs_confirmation
+         is returned so the caller can ask the user first.
+
+    dry_run=True  → compute the plan, write nothing.
+    confirm_drop  → the user approved dropping the surfaced task; apply it.
+
+    Every return carries an explicit `message` so no path fails silently.
     """
     missed_block = db.query(ScheduleBlock).filter(ScheduleBlock.id == missed_block_id).first()
     if not missed_block or not missed_block.task_id:
-        return {"rescheduled": False, "reason": "block_not_a_task"}
+        return {"rescheduled": False, "needs_confirmation": False,
+                "reason": "block_not_a_task", "message": "That block isn't a reschedulable task."}
 
     task = db.query(Task).filter(Task.id == missed_block.task_id).first()
     if not task:
-        return {"rescheduled": False, "reason": "task_not_found"}
+        return {"rescheduled": False, "needs_confirmation": False,
+                "reason": "task_not_found", "message": "Couldn't find that task."}
 
-    priority  = task.priority or "medium"
-    task_slots = slots_needed(task.duration_minutes)
-
-    now   = datetime.utcnow()
+    now   = datetime.now()
     today = now.date()
 
-    if priority == "optional":
-        return {"rescheduled": False, "reason": "optional_dropped", "task_title": task.title}
+    deadline_date = _parse_deadline_date(task.deadline)
+    if deadline_date is not None and deadline_date < today:
+        return {"rescheduled": False, "needs_confirmation": False, "reason": "deadline_passed",
+                "task_title": task.title,
+                "message": f'"{task.title}" can\'t be rescheduled — its deadline has passed.'}
 
-    deadline_date: Optional[date] = None
-    if task.deadline is not None:
-        try:
-            if isinstance(task.deadline, str):
-                deadline_date = date.fromisoformat(task.deadline[:10])
-            elif hasattr(task.deadline, "date"):
-                deadline_date = task.deadline.date()
-            else:
-                deadline_date = date.fromisoformat(str(task.deadline)[:10])
-        except Exception:
-            logger.warning(f"Could not parse deadline for task id={task.id}: {task.deadline!r}")
-            deadline_date = None
-        if deadline_date is not None and deadline_date < today:
-            return {"rescheduled": False, "reason": "deadline_passed", "task_title": task.title}
+    week_end = today + timedelta(days=6 - today.weekday())
+    num_days = max(1, (week_end - today).days + 1)
 
-    week_end   = today + timedelta(days=6 - today.weekday())
-    search_end = min(deadline_date, week_end) if deadline_date else week_end
+    now_slot          = now.hour * 2 + (1 if now.minute >= 30 else 0)
+    search_start_slot = min(now_slot + 1, SLOTS_PER_DAY)
 
-    if priority == "low":
-        search_end = min(search_end, today + timedelta(days=1))
+    # Preferences bound the search to waking hours so bumped tasks don't land at 5 AM.
+    prefs = (
+        db.query(WeeklyPreferences)
+        .filter(WeeklyPreferences.user_id == user_id)
+        .order_by(WeeklyPreferences.week_start_date.desc(), WeeklyPreferences.id.desc())
+        .first()
+    )
 
-    num_days = max(1, (search_end - today).days + 1)
+    def p(attr: str, default):
+        return getattr(prefs, attr, default) if prefs else default
 
-    now_mins          = now.hour * 60 + now.minute + 30
-    search_start_slot = min(now_mins // 30 + 1, SLOTS_PER_DAY)
+    wake_slot           = time_to_slot(p("preferred_wake_time", "07:30"))
+    bed_slot            = time_to_slot(p("preferred_bedtime", "23:30"))
+    if bed_slot == 0:
+        bed_slot = SLOTS_PER_DAY
+    routine_slots       = slots_needed(p("morning_routine_mins", 30))
+    night_routine_slots = slots_needed(p("night_routine_mins", 20))
+    night_start         = max(wake_slot + routine_slots, bed_slot - night_routine_slots)
+    day_lo              = wake_slot + routine_slots
 
+    # ── Build the occupancy map + the set of movable (bump-able) task blocks ──
     time_map: List[List[bool]] = [[False] * SLOTS_PER_DAY for _ in range(num_days)]
+    movable: Dict[int, Dict[str, Any]] = {}   # block_id → {task, d, start, n}
 
     future_blocks = (
         db.query(ScheduleBlock)
         .filter(
             ScheduleBlock.user_id == user_id,
             ScheduleBlock.date >= today,
-            ScheduleBlock.date <= search_end,
+            ScheduleBlock.date <= week_end,
             ScheduleBlock.id != missed_block_id,
         )
         .all()
     )
 
+    task_cache: Dict[int, Task] = {}
     for fb in future_blocks:
         d_offset = (fb.date - today).days
         if d_offset < 0 or d_offset >= num_days:
@@ -1285,80 +1352,169 @@ def reorganize_missed_task(
         s_start = time_to_slot(fb.start_time)
         eh, em  = map(int, fb.end_time.split(":"))
         s_end   = SLOTS_PER_DAY if (eh == 0 and em == 0) else time_to_slot(fb.end_time)
-        mark_occupied(time_map, d_offset, s_start, max(1, s_end - s_start))
+        n_slots = max(1, s_end - s_start)
+        mark_occupied(time_map, d_offset, s_start, n_slots)
+        # A movable task block: an unlocked task block whose task is still active.
+        if fb.block_type == "task" and not fb.is_locked and fb.task_id:
+            ft = task_cache.get(fb.task_id) or db.query(Task).filter(Task.id == fb.task_id).first()
+            if ft:
+                task_cache[fb.task_id] = ft
+                if ft.status in ("scheduled", "pending"):
+                    movable[fb.id] = {"task": ft, "d": d_offset, "start": s_start, "n": n_slots}
 
     mark_occupied(time_map, 0, 0, min(search_start_slot, SLOTS_PER_DAY))
 
-    LATE_NIGHT_SLOT = time_to_slot("22:00")
-    MEAL_SLOTS      = [time_to_slot("08:00"), time_to_slot("12:30"), time_to_slot("19:00")]
-    original_slot   = time_to_slot(missed_block.start_time) if missed_block else None
+    # old block that each task currently occupies (so apply can delete it)
+    old_block_of: Dict[int, int] = {task.id: missed_block_id}
+    for bid, info in movable.items():
+        old_block_of[info["task"].id] = bid
 
-    def _orig_period(s: Optional[int]) -> int:
-        if s is None: return 1
-        return 0 if s < 24 else 1 if s < 34 else 2
+    def prank(t: Task) -> int:
+        return PRIORITY_ORDER.get(t.priority or "medium", 2)
 
-    orig_period = _orig_period(original_slot)
+    def find_slot(t: Task) -> Optional[Tuple[int, int, int]]:
+        tn = slots_needed(t.duration_minutes or 30)
+        t_dl = _parse_deadline_date(t.deadline)
+        for d in range(num_days):
+            d_date = today + timedelta(days=d)
+            if t_dl is not None and d_date > t_dl:
+                break
+            lo = max(day_lo, search_start_slot) if d == 0 else day_lo
+            slot = find_free_slot(time_map, d, tn, start_from=lo, end_before=night_start)
+            if slot is not None:
+                return (d, slot, tn)
+        return None
 
-    candidates: List[tuple] = []
+    active_movable: Dict[int, Dict[str, Any]] = dict(movable)
+    moves: List[Dict[str, Any]] = []   # {task, d, slot, n}
+    drops: List[Task] = []
 
-    for d_offset in range(num_days):
-        from_slot = search_start_slot if d_offset == 0 else 0
-        for start in range(from_slot, SLOTS_PER_DAY - task_slots + 1):
-            if not all(not time_map[d_offset][s] for s in range(start, start + task_slots)):
-                continue
+    def cascade(t: Task, depth: int = 0) -> None:
+        if depth > 8:
+            drops.append(t)
+            return
+        r = find_slot(t)
+        if r is not None:
+            d, slot, tn = r
+            mark_occupied(time_map, d, slot, tn)
+            moves.append({"task": t, "d": d, "slot": slot, "n": tn})
+            return
+        # No empty slot — try to displace a strictly-lower-priority movable task.
+        # Try the lowest-priority candidates first, and use the first whose
+        # removal actually opens a fit for t.
+        victims = sorted(
+            [(bid, info) for bid, info in active_movable.items()
+             if prank(info["task"]) > prank(t)],
+            key=lambda kv: prank(kv[1]["task"]), reverse=True,   # lowest priority first
+        )
+        for vid, vinfo in victims:
+            for s in range(vinfo["start"], vinfo["start"] + vinfo["n"]):
+                time_map[vinfo["d"]][s] = False
+            r = find_slot(t)
+            if r is not None:
+                active_movable.pop(vid)
+                d, slot, tn = r
+                mark_occupied(time_map, d, slot, tn)
+                moves.append({"task": t, "d": d, "slot": slot, "n": tn})
+                cascade(vinfo["task"], depth + 1)   # displaced victim looks for a home
+                return
+            # Freeing this victim didn't help — restore it and try the next.
+            mark_occupied(time_map, vinfo["d"], vinfo["start"], vinfo["n"])
+        drops.append(t)   # nothing lower could be displaced to make room
 
-            score = d_offset
+    cascade(task)
 
-            if start >= LATE_NIGHT_SLOT:
-                score += 2
+    def _move_of(tid: int) -> Optional[Dict[str, Any]]:
+        return next((m for m in moves if m["task"].id == tid), None)
 
-            for ms in MEAL_SLOTS:
-                if abs(start - ms) <= 1:
-                    score += 1
-                    break
+    missed_move   = _move_of(task.id)
+    bumped_moves  = [m for m in moves if m["task"].id != task.id]
+    drop_titles   = [t.title for t in drops]
+    needs_conf    = bool(drops)
 
-            if priority in ("medium", "low"):
-                slot_period = 0 if start < 24 else 1 if start < 34 else 2
-                if slot_period == orig_period:
-                    score -= 1
+    def _fmt(m: Dict[str, Any]) -> Tuple[str, str, str]:
+        d_date = today + timedelta(days=m["d"])
+        return (str(d_date), slot_to_time(m["slot"]), slot_to_time(m["slot"] + m["n"]))
 
-            candidates.append((score, d_offset, start))
+    # ── A drop is required and the user hasn't approved it → ask, write nothing ──
+    if needs_conf and not confirm_drop:
+        if missed_move is not None:
+            msg = (f'To reschedule "{task.title}", {_and_join(drop_titles)} would have to be '
+                   f'dropped — there\'s no open slot left this week. Drop it?')
+        else:
+            msg = (f'"{task.title}" has no open slot anywhere this week. '
+                   f'Drop it from the schedule, or keep it in your task list?')
+        return {
+            "rescheduled": False,
+            "needs_confirmation": True,
+            "task_title": task.title,
+            "drop_titles": drop_titles,
+            "would_place": ({"date": _fmt(missed_move)[0], "start_time": _fmt(missed_move)[1]}
+                            if missed_move else None),
+            "message": msg,
+        }
 
-    if not candidates:
-        if priority in ("critical", "high"):
-            return {
-                "rescheduled": False,
-                "reason": "needs_attention",
-                "task_title": task.title,
-                "priority": priority,
-            }
-        return {"rescheduled": False, "reason": "no_slot_found", "task_title": task.title}
+    # ── Dry-run plan (no drop, or drop already implied) — write nothing ──────────
+    if dry_run:
+        return {
+            "dry_run": True,
+            "rescheduled": missed_move is not None,
+            "needs_confirmation": needs_conf,
+            "task_title": task.title,
+            "bumped": [m["task"].title for m in bumped_moves],
+            "drop_titles": drop_titles,
+        }
 
-    candidates.sort()
-    _, best_d_offset, best_slot = candidates[0]
-    new_date = today + timedelta(days=best_d_offset)
+    # ── Apply ───────────────────────────────────────────────────────────────────
+    delete_ids = {missed_block_id}
+    for m in moves:
+        ob = old_block_of.get(m["task"].id)
+        if ob:
+            delete_ids.add(ob)
+    for t in drops:
+        ob = old_block_of.get(t.id)
+        if ob:
+            delete_ids.add(ob)
+    if delete_ids:
+        db.query(ScheduleBlock).filter(ScheduleBlock.id.in_(delete_ids)).delete(synchronize_session=False)
 
-    new_block = ScheduleBlock(
-        user_id       = user_id,
-        task_id       = task.id,
-        block_type    = "task",
-        title         = task.title,
-        start_time    = slot_to_time(best_slot),
-        end_time      = slot_to_time(best_slot + task_slots),
-        date          = new_date,
-        is_locked     = False,
-        priority      = task.priority,
-        is_rescheduled= True,
-    )
-    db.add(new_block)
+    for m in moves:
+        d_date = today + timedelta(days=m["d"])
+        db.add(ScheduleBlock(
+            user_id=user_id, task_id=m["task"].id, block_type="task", title=m["task"].title,
+            start_time=slot_to_time(m["slot"]), end_time=slot_to_time(m["slot"] + m["n"]),
+            date=d_date, is_locked=False, priority=m["task"].priority, is_rescheduled=True,
+        ))
+        db.query(Task).filter(Task.id == m["task"].id).update(
+            {"status": "scheduled"}, synchronize_session=False)
+
+    for t in drops:
+        db.query(Task).filter(Task.id == t.id).update(
+            {"status": "pending"}, synchronize_session=False)
+
     db.commit()
-    db.refresh(new_block)
 
-    return {
-        "rescheduled":    True,
-        "task_title":     task.title,
-        "new_date":       str(new_date),
-        "new_start_time": slot_to_time(best_slot),
-        "new_end_time":   slot_to_time(best_slot + task_slots),
-        "block_id":       new_block.id,
-    }
+    # ── Build the explicit result message ───────────────────────────────────────
+    if missed_move is not None:
+        nd, ns, ne = _fmt(missed_move)
+        parts = [f'"{task.title}" rescheduled to {nd} at {ns}.']
+        for m in bumped_moves:
+            bd, bs, _ = _fmt(m)
+            parts.append(f'Moved "{m["task"].title}" to {bd} {bs}.')
+        for t in drops:
+            parts.append(f'Dropped "{t.title}" — no room left; it\'s back in your task list.')
+        message = " ".join(parts)
+        result: Dict[str, Any] = {
+            "rescheduled": True, "needs_confirmation": False, "task_title": task.title,
+            "new_date": nd, "new_start_time": ns, "new_end_time": ne,
+            "bumped": [m["task"].title for m in bumped_moves],
+            "dropped": drop_titles, "message": message,
+        }
+    else:
+        # The missed task itself is the drop (couldn't be placed anywhere)
+        message = f'"{task.title}" couldn\'t be rescheduled anywhere this week — it\'s in your task list.'
+        result = {
+            "rescheduled": False, "needs_confirmation": False, "task_title": task.title,
+            "bumped": [], "dropped": [task.title], "message": message,
+        }
+    return result

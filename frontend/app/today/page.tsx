@@ -152,8 +152,12 @@ export default function TodayPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [overloaded, setOverloaded] = useState(false);
-  // Finding 3.3: detailed lines for gym/MT/meals/tasks that couldn't be placed this week
+  // Finding 3.3: detailed lines for gym/MT/tasks (+ real meal drops) that couldn't be placed
   const [droppedItems, setDroppedItems] = useState<string[]>([]);
+  // Item 1: meals skipped because a shift covers them — informational, not overload
+  const [mealsAtWork, setMealsAtWork] = useState<string[]>([]);
+  // Item 2: pending missed-task reschedule awaiting the user's drop confirmation
+  const [dropConfirm, setDropConfirm] = useState<{ blockId: number; taskTitle: string; message: string } | null>(null);
   const [showStickyBar, setShowStickyBar] = useState(false);
   // FIX 4: reactive nowMins — updated by interval so NowLine and current-block highlight stay accurate
   const [nowMins, setNowMins] = useState(() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); });
@@ -188,6 +192,13 @@ export default function TodayPage() {
         setDroppedItems(Array.isArray(parsed) ? parsed : []);
       } catch {
         setDroppedItems([]);
+      }
+      try {
+        const raw = localStorage.getItem(`sunday_atwork_${monday}`);
+        const parsed = raw ? JSON.parse(raw) : [];
+        setMealsAtWork(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setMealsAtWork([]);
       }
     } catch (e) {
       console.error("[Sunday] Failed to load schedule:", e);
@@ -297,21 +308,49 @@ export default function TodayPage() {
       await updateTaskStatus(taskId, "missed");
       try {
         const result = await reorganizeMissed(blockId);
-        if (result.rescheduled && result.new_date && result.new_start_time) {
-          showToast(
-            `${result.task_title} rescheduled to ${rescheduleDay(result.new_date)} at ${fmt12(result.new_start_time)}`
-          );
-        } else {
-          showToast(
-            `${result.task_title ?? "Task"} couldn't be rescheduled — no slot found this week`,
-            "error",
-          );
+        // A drop is required — ask before dropping anything (Item 2).
+        if (result.needs_confirmation) {
+          setDropConfirm({
+            blockId,
+            taskTitle: result.task_title ?? "Task",
+            message: result.message ?? "This task can't be placed without dropping another. Continue?",
+          });
+          return; // leave the schedule untouched until the user decides
         }
+        showToast(
+          result.message ??
+            (result.rescheduled
+              ? `${result.task_title} rescheduled`
+              : `${result.task_title ?? "Task"} couldn't be rescheduled`),
+          result.rescheduled ? "success" : "error",
+        );
       } catch {
         showToast("Reschedule failed", "error");
       }
       await load();
     }
+  }
+
+  // Item 2: user approved dropping a task to make room for the rescheduled one.
+  async function confirmDrop() {
+    if (!dropConfirm) return;
+    const { blockId } = dropConfirm;
+    setDropConfirm(null);
+    try {
+      const result = await reorganizeMissed(blockId, { confirmDrop: true });
+      showToast(result.message ?? "Schedule updated", result.rescheduled ? "success" : "error");
+    } catch {
+      showToast("Reschedule failed", "error");
+    }
+    await load();
+  }
+
+  // Item 2: user declined the drop — nothing was changed; say so explicitly.
+  function declineDrop() {
+    if (!dropConfirm) return;
+    const { taskTitle } = dropConfirm;
+    setDropConfirm(null);
+    showToast(`"${taskTitle}" was not rescheduled — nothing was dropped.`, "error");
   }
 
   const taskBlocks = blocks.filter(b => b.block_type === "task");
@@ -538,6 +577,25 @@ export default function TodayPage() {
             </div>
           )}
 
+          {/* Item 1: "eating at work" — informational, visually distinct (blue, not amber) */}
+          {mealsAtWork.length > 0 && (
+            <div className="mb-5 rounded-xl bg-sky-50 border border-sky-200 px-4 py-3">
+              <p className="text-[13px] font-semibold text-sky-800 flex items-center gap-2 mb-1">
+                <span>🍽️</span>
+                <span>Eating at work on some days:</span>
+              </p>
+              <ul className="space-y-0.5">
+                {mealsAtWork.map((line, i) => (
+                  <li key={i} className="text-[13px] text-sky-700 flex items-start gap-2">
+                    <span className="mt-0.5">•</span>
+                    <span>{line}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[12px] text-sky-600 mt-1">Not a problem — just a shift covering those meal times.</p>
+            </div>
+          )}
+
           {/* Time groups */}
           <div className="space-y-8">
             {(["morning", "afternoon", "evening"] as TimeGroup[]).map((key) => {
@@ -612,6 +670,35 @@ export default function TodayPage() {
         onAdded={msg => { showToast(msg); load(); }}
         onError={msg => showToast(msg, "error")}
       />
+
+      {/* Item 2: drop-confirmation modal — shown when a reschedule needs to drop a task */}
+      {dropConfirm && (
+        <div className="fixed inset-0 z-[70] bg-black/40 flex items-end sm:items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-5">
+            <div className="flex items-start gap-3 mb-4">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <p className="text-[15px] font-semibold text-zinc-900 mb-1">This week is full</p>
+                <p className="text-[13px] text-zinc-600 leading-relaxed">{dropConfirm.message}</p>
+              </div>
+            </div>
+            <div className="flex gap-2.5">
+              <button
+                onClick={declineDrop}
+                className="flex-1 py-2.5 rounded-xl border border-zinc-200 text-[14px] font-medium text-zinc-600 hover:bg-zinc-50 transition-colors"
+              >
+                Keep everything
+              </button>
+              <button
+                onClick={confirmDrop}
+                className="flex-1 py-2.5 rounded-xl bg-amber-600 text-white text-[14px] font-semibold hover:bg-amber-700 transition-colors"
+              >
+                Drop it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast notifications */}
       {toasts.length > 0 && (

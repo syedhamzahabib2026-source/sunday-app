@@ -176,6 +176,7 @@ def generate_schedule(
             TaskResponse.model_validate(t).model_dump() for t in result["unscheduled_tasks"]
         ],
         "dropped_items":       result.get("dropped_items", []),
+        "meals_at_work":       result.get("meals_at_work", []),
         "unscheduled_summary": result.get("unscheduled_summary", {}),
         "blocks_by_day":       _group_by_day(result["blocks"]),
     }
@@ -186,6 +187,10 @@ def generate_schedule(
 class ReorganizeRequest(BaseModel):
     reason: str = "manual"
     missed_block_id: Optional[int] = None
+    # Missed-task cascade options: dry_run plans without writing; confirm_drop
+    # approves dropping a task the cascade couldn't place.
+    dry_run: bool = False
+    confirm_drop: bool = False
 
 
 @router.post("/reorganize")
@@ -197,7 +202,10 @@ def reorganize_schedule(
     if payload.missed_block_id is not None:
         from app.engines.scheduler import reorganize_missed_task
         try:
-            return reorganize_missed_task(current_user.id, payload.missed_block_id, db)
+            return reorganize_missed_task(
+                current_user.id, payload.missed_block_id, db,
+                dry_run=payload.dry_run, confirm_drop=payload.confirm_drop,
+            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Reschedule failed: {e}")
 

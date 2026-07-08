@@ -236,6 +236,7 @@ def generate_with_lifecycle(
             for t in result["unscheduled_tasks"]
         ],
         "dropped_items":       result.get("dropped_items", []),
+        "meals_at_work":       result.get("meals_at_work", []),
         "unscheduled_summary": result.get("unscheduled_summary", {}),
     }
 

@@ -2228,10 +2228,11 @@ function ReviewStep({ data, set, mode, weekTarget }: {
 
 // ─── DONE SCREEN ──────────────────────────────────────────────────────────────
 
-function DoneScreen({ weekTarget, droppedItems = [] }: { weekTarget: "current" | "next"; droppedItems?: string[] }) {
+function DoneScreen({ weekTarget, droppedItems = [], mealsAtWork = [] }: { weekTarget: "current" | "next"; droppedItems?: string[]; mealsAtWork?: string[] }) {
   const router = useRouter();
   const isNext = weekTarget === "next";
   const hasDrops = droppedItems.length > 0;
+  const hasAtWork = mealsAtWork.length > 0;
   return (
     <div className="w-full max-w-lg mx-auto text-center fade-in">
       <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-8 ${hasDrops ? "bg-amber-50" : "bg-green-50"}`}>
@@ -2269,6 +2270,27 @@ function DoneScreen({ weekTarget, droppedItems = [] }: { weekTarget: "current" |
           </ul>
           <p className="text-[12px] text-amber-600 leading-relaxed">
             Consider reducing commitments or session counts in your setup, then regenerate.
+          </p>
+        </div>
+      )}
+
+      {/* Item 1: "eating at work" — informational, visually distinct from overload */}
+      {hasAtWork && (
+        <div className="mb-10 text-left rounded-2xl bg-sky-50 border border-sky-200 px-5 py-4">
+          <p className="text-[14px] font-semibold text-sky-800 mb-2 flex items-center gap-2">
+            <span>🍽️</span>
+            <span>Heads up — you&apos;ll be eating at work on some days:</span>
+          </p>
+          <ul className="space-y-1">
+            {mealsAtWork.map((line, i) => (
+              <li key={i} className="text-[13px] text-sky-700 flex items-start gap-2">
+                <span className="mt-0.5">•</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[12px] text-sky-600 leading-relaxed mt-2">
+            These aren&apos;t scheduling problems — just a note that a shift covers those meal times.
           </p>
         </div>
       )}
@@ -2385,8 +2407,10 @@ export default function SetupPage() {
   // One-tap generation
   const [generatingDirectly, setGeneratingDirectly] = useState(false);
 
-  // Finding 3.3: items the scheduler couldn't place (gym/MT/meals/tasks), shown on the Done screen
+  // Finding 3.3: items the scheduler couldn't place (gym/MT/tasks + real meal drops)
   const [droppedItems, setDroppedItems] = useState<string[]>([]);
+  // Item 1: meals skipped because a shift covers them ("eating at work") — informational
+  const [mealsAtWork, setMealsAtWork] = useState<string[]>([]);
 
   // On mount: check for saved draft, then fall back to ?step= / ?week= query params
   // Also load last-week data and saved locations
@@ -2700,11 +2724,15 @@ export default function SetupPage() {
     // FIX 7: store is_overloaded in localStorage so today page can read it on load
     const genResult = await generateSchedule(weekStart, generationTimestamp, weekTarget);
     const dropped = genResult.dropped_items ?? [];
+    const atWork = genResult.meals_at_work ?? [];
     setDroppedItems(dropped);
+    setMealsAtWork(atWork);
     try {
       localStorage.setItem(`sunday_overloaded_${weekStart}`, genResult.is_overloaded ? "1" : "0");
       // Persist the detailed drop lines so the Today page can show them too (3.3)
       localStorage.setItem(`sunday_dropped_${weekStart}`, JSON.stringify(dropped));
+      // Persist "eating at work" notes separately (Item 1) — informational, not overload
+      localStorage.setItem(`sunday_atwork_${weekStart}`, JSON.stringify(atWork));
     } catch { /* ignore */ }
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
     return taskErrors;
@@ -2761,7 +2789,7 @@ export default function SetupPage() {
       {/* Content */}
       <div className="min-h-screen flex flex-col items-center px-6 pt-24 pb-32">
         {done ? (
-          <DoneScreen weekTarget={weekTarget} droppedItems={droppedItems} />
+          <DoneScreen weekTarget={weekTarget} droppedItems={droppedItems} mealsAtWork={mealsAtWork} />
         ) : draft !== null && draftChecked ? (
           <DraftPrompt draft={draft} onResume={resumeDraft} onDiscard={discardDraft} />
         ) : mode === null ? (

@@ -689,9 +689,58 @@ def _continue_pick_flow(user_id: str, text: str, say):
         say(f":x: *\"{task['title']}\"* cancelled. {reorg}")
 
     elif flow == "missed":
-        _api_patch(f"/tasks/{task_id}/status", {"status": "missed"})
-        reorg = _do_reorganize()
-        say(f":warning: *\"{task['title']}\"* marked as missed. {reorg}")
+        _handle_missed_reschedule(user_id, task, say)
+
+
+# ── Missed-task priority-cascade reschedule (asks before dropping) ─────────────
+
+def _handle_missed_reschedule(user_id: str, task: dict, say):
+    """Mark a task missed, then priority-cascade reschedule it.
+
+    If placing it would require dropping a lower-priority task that has nowhere
+    else to go, ask the user before dropping anything.
+    """
+    task_id = task["id"]
+    _api_patch(f"/tasks/{task_id}/status", {"status": "missed"})
+    block = _find_task_block(task_id)
+    if not block:
+        say(f":warning: *\"{task['title']}\"* marked as missed. "
+            "(No scheduled block found to reschedule.)")
+        return
+    result = _api_post("/schedule/reorganize",
+                       {"missed_block_id": block["id"], "reason": "missed"})
+    if result.get("needs_confirmation"):
+        conversation_state[user_id] = {
+            "flow": "confirm_drop",
+            "step": "waiting",
+            "data": {"block_id": block["id"],
+                     "task_title": result.get("task_title", task["title"])},
+        }
+        say(f":warning: {result.get('message')}\n"
+            "Reply *yes* to drop it, or *no* to keep everything.")
+        return
+    say(result.get("message") or f":warning: *\"{task['title']}\"* marked as missed.")
+
+
+def _continue_confirm_drop(user_id: str, text: str, say):
+    lower = text.lower().strip()
+    state = conversation_state[user_id]
+    block_id = state["data"]["block_id"]
+    title    = state["data"]["task_title"]
+
+    _YES = frozenset(("yes", "y", "yep", "yeah", "sure", "ok", "okay", "confirm", "drop", "drop it", "do it"))
+    _NO  = frozenset(("no", "n", "nope", "nah", "keep", "keep it", "cancel", "stop"))
+
+    if lower in _YES:
+        del conversation_state[user_id]
+        result = _api_post("/schedule/reorganize",
+                           {"missed_block_id": block_id, "reason": "missed", "confirm_drop": True})
+        say(result.get("message") or "Done.")
+    elif lower in _NO:
+        del conversation_state[user_id]
+        say(f":information_source: *\"{title}\"* was not rescheduled — nothing was dropped.")
+    else:
+        say("Please reply *yes* to drop it or *no* to keep everything.")
 
 
 def _continue_flow(user_id: str, text: str, say):
@@ -704,6 +753,8 @@ def _continue_flow(user_id: str, text: str, say):
         _continue_add_event(user_id, text, say)
     elif flow == "confirm_reorg":
         _continue_confirm_reorg(user_id, text, say)
+    elif flow == "confirm_drop":
+        _continue_confirm_drop(user_id, text, say)
 
 
 # ── Intent router ─────────────────────────────────────────────────────────────
@@ -774,10 +825,7 @@ def _route_by_intent(intent: str, data: dict, user_id: str, say, event: dict):
         tasks = _active_tasks()
         match = _fuzzy_find_task(hint, tasks)
         if match:
-            task_id = match["id"]
-            _api_patch(f"/tasks/{task_id}/status", {"status": "missed"})
-            reorg = _do_reorganize()
-            say(f":warning: *\"{match['title']}\"* marked as missed. {reorg}")
+            _handle_missed_reschedule(user_id, match, say)
         else:
             _start_pick_flow(user_id, "missed", say)
     elif intent == "reschedule":
